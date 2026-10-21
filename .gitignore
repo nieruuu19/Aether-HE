@@ -31,3 +31,5 @@ graphify-out/
 .superpowers/
 *.log
 service/service.log
+.vs/
+

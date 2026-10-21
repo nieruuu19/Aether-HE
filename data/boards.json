@@ -1,5 +1,6 @@
 {
-  "_comment": "Source of truth for the README boards section. TWO lists, deliberately: 'boards' is the SUPPORTED table — only keyboards Aether can actually drive, i.e. exactly the registry entries with offerInUi true (data/board_registry.json). 'recognized' is the identify-only list — boards Aether detects, names and draws but cannot drive, kept visible so the app can explain itself instead of silently pretending a board doesn't exist. Every entry carries the registry `slug` that ties it to data/board_registry.json; tests/test_boards.py fails if the two files drift apart. After editing, run `python tools/gen_boards_table.py --write` (CI checks the README stays in sync). Fields: slug, name, switches, lighting/actuation = true|false|\"wip\", status. Cell semantics differ from the registry's capability flags ON PURPOSE: the registry records whether a command is wired, this table records what a USER can rely on — so a board whose protocol is shared-by-inference but never round-tripped on the physical hardware shows \"wip\", not a tick.",
+  "schemaVersion": 2,
+  "description": "Public summary of supported and recognized boards. Must stay in sync with boards.py and README.md (enforced by tests/test_docs_sync.py).",
   "boards": [
     {
       "slug": "aula-win60-he",
@@ -7,93 +8,115 @@
       "switches": "Hall-effect",
       "lighting": true,
       "actuation": true,
-      "status": "Fully supported — hardware-verified"
-    },
-    {
-      "slug": "aula-mini60he-pro",
-      "name": "Aula MINI 60 HE PRO (wired)",
-      "switches": "Hall-effect",
-      "lighting": true,
-      "actuation": true,
-      "status": "Fully supported — hardware-verified (#6)"
-    },
-    {
-      "slug": "aula-mini60he-pro-24g",
-      "name": "Aula MINI 60 HE PRO (2.4 GHz dongle)",
-      "switches": "Hall-effect",
-      "lighting": true,
-      "actuation": true,
-      "status": "Supported over RF — firmware effects only, no host streaming (#6)"
+      "status": "Full support"
     },
     {
       "slug": "aula-win68-he",
-      "name": "Aula WIN 68 HE",
+      "name": "Aula Win68 HE",
       "switches": "Hall-effect",
       "lighting": "wip",
       "actuation": "wip",
-      "status": "Bring-up — auto-detected, shares the Win60 protocol; not yet verified on hardware"
-    }
-  ],
-  "recognized": [
-    {
-      "slug": "aula-kp-te153",
-      "name": "Aula KP-TE153",
-      "reason": "Recognised and drawn from the vendor's own 69-key UK ISO layout, and it shares the Win60's protocol by USB identity — but no physical KP-TE153 has ever been driven by Aether, and the ISO PRCS hidCode remap leaves SOCD unverified for it. Not offered as a selectable board."
-    },
-    {
-      "slug": "aula-mini60he-max",
-      "name": "Aula MINI60HE Max",
-      "reason": "protocol decoded from a capture but never proven on hardware (#4)"
-    },
-    {
-      "slug": "aula-mini60he-pro-80b2",
-      "name": "Aula MINI 60 HE PRO (alt PID 0x80B2)",
-      "reason": "second hardware revision, no capture of its own (#6)"
-    },
-    {
-      "slug": "aula-mini68he",
-      "name": "Aula MINI 68 HE",
-      "reason": "listed by the vendor driver, no capture"
-    },
-    {
-      "slug": "aula-mini68he-pro",
-      "name": "Aula MINI 68 HE PRO",
-      "reason": "listed by the vendor driver, no capture"
-    },
-    {
-      "slug": "aula-mini68he-max",
-      "name": "Aula MINI68 HE MAX",
-      "reason": "listed by the vendor driver, no capture"
-    },
-    {
-      "slug": "aula-f75-he",
-      "name": "AULA F75 HE",
-      "reason": "listed by the vendor driver, no capture"
-    },
-    {
-      "slug": "aula-mini60he-max-24g",
-      "name": "Aula MINI60HE / MINI68HE MAX (2.4 GHz dongle)",
-      "reason": "different transport from the decoded wired boards, no capture"
+      "status": "Sonix SN32F248B protocol written, needs tester (#1)"
     },
     {
       "slug": "aula-win60he-max",
       "name": "Aula Win60 HE Max",
-      "reason": "layout added, needs captures (#5)"
+      "switches": "Hall-effect",
+      "lighting": "wip",
+      "actuation": true,
+      "status": "Supported via SparkPlayJoy 6x21 protocol (#5)"
     },
     {
       "slug": "aula-win68he-max",
-      "name": "Aula win68 HE Max",
-      "reason": "layout added (65%), needs captures (#7)"
+      "name": "Aula WIN 68 HE Max",
+      "switches": "Hall-effect",
+      "lighting": "wip",
+      "actuation": true,
+      "status": "Supported via SparkPlayJoy 6x21 protocol (#7)"
     },
     {
-      "slug": "aula-win60he-pro",
-      "name": "Aula WIN 60 HE Pro",
-      "reason": "SayoDevice silicon (8089:0009). protocol_sayo reproduces the contributor's captures byte-for-byte, but nobody working on Aether owns this board, so no frame from Aether has ever reached one. Recognised, named and drawn; not offered."
+      "slug": "epomaker-he68",
+      "name": "Epomaker HE68",
+      "switches": "Hall-effect",
+      "lighting": "wip",
+      "actuation": false,
+      "status": "Rongyuan lighting written, needs tester (#3)"
     },
     {
-      "slug": "aula-f75-tri-mode",
-      "name": "Aula F75 Tri-Mode",
-      "reason": "in the registry, needs captures (#8)"
+      "slug": "attack-shark-x68he",
+      "name": "Attack Shark X68 HE",
+      "switches": "Hall-effect",
+      "lighting": "wip",
+      "actuation": false,
+      "status": "Rongyuan lighting written, needs tester (#11)"
+    },
+    {
+      "slug": "mini-60-he",
+      "name": "Mini 60 HE",
+      "switches": "Hall-effect",
+      "lighting": "wip",
+      "actuation": false,
+      "status": "8-byte lighting driver written (8089:000B / 0xFF00), needs hardware tester (#9)"
+    },
+    {
+      "slug": "attack-shark-k85",
+      "name": "Attack Shark K85",
+      "switches": "Hall-effect",
+      "lighting": false,
+      "actuation": false,
+      "status": "SayoDevice O2L controller detected — protocol encrypted, read-only"
+    },
+    {
+      "slug": "cidoo-qk61-v2",
+      "name": "CIDOO QK61 V2",
+      "switches": "Mechanical",
+      "lighting": false,
+      "actuation": false,
+      "status": "Planned — needs protocol RE (#2)"
+    }
+  ],
+  "recognized": [
+    {
+      "slug": "drunkdeer-g60",
+      "name": "DrunkDeer G60",
+      "vid": "0x352D",
+      "pid": "0x2382",
+      "notes": "Planned — public open-source RE exists"
+    },
+    {
+      "slug": "drunkdeer-a75",
+      "name": "DrunkDeer A75",
+      "vid": "0x352D",
+      "pid": "0x2383",
+      "notes": "Planned — shares protocol with G60"
+    },
+    {
+      "slug": "madlions-mad60he",
+      "name": "Madlions MAD60HE",
+      "vid": "0x373B",
+      "pid": "0x1055",
+      "notes": "Planned — WebHID driver at hub.fgg.com.cn (#6)"
+    },
+    {
+      "slug": "monsgeek-fun60-pro",
+      "name": "MonsGeek FUN60 Pro",
+      "vid": "0x3151",
+      "pid": "0x502D",
+      "notes": "Planned — Rongyuan family, likely compatible with Epomaker HE68 (#10)"
+    },
+    {
+      "slug": "wooting-60he",
+      "name": "Wooting 60HE",
+      "vid": "0x31E3",
+      "pid": "0x1310",
+      "notes": "Planned — Wooting Analog SDK is open-source (#8)"
+    },
+    {
+      "slug": "aula-f75",
+      "name": "Aula F75",
+      "vid": null,
+      "pid": null,
+      "notes": "Planned — mechanical (not HE), needs VID/PID (#4)"
     }
   ]
 }
