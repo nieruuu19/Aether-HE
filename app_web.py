@@ -1,4 +1,4 @@
-"""AETHER HE — native webview shell."""
+﻿"""AETHER HE — native webview shell."""
 import contextlib
 import json
 import logging
@@ -162,10 +162,10 @@ class _FallbackWin68MaxProfile:
         "calibration": False,
     }
     actuation = {
-        "deadzoneScope": "global",
+        "deadzoneScope": "per_key",
         "travelRange": [0.1, 3.4],
         "rtRange": [0.01, 3.4],
-        "deadzoneRange": [0.0, 0.5],
+        "deadzoneRange": [0.0, 1.0],
         "switches": [],
     }
 
@@ -631,7 +631,7 @@ class Api:
     def set_color(self, r, g, b, brightness=4, mode=0, speed=4):
         return self.set_light(mode, r, g, b, brightness, speed)
 
-    _TRIGGER_MODES = (0, 12, 13)
+    _TRIGGER_MODES = {0, 1, 2, 12, 13, 14, 98, 99}
 
     def _clamp_mm(self, range_key, mm):
         mm = float(mm)
@@ -716,10 +716,11 @@ class Api:
         for idx, cfg in self._trigger_state.items():
             groups.setdefault(cfg, []).append(idx)
         for cfg, idxs in groups.items():
-            if edited is not None and not (set(idxs) & edited):
+            target_idxs = [i for i in idxs if i in edited] if edited is not None else list(idxs)
+            if not target_idxs:
                 continue
             mode, travel, i1, i2 = cfg
-            self.driver.set_actuation(list(idxs), int(mode),
+            self.driver.set_actuation(target_idxs, int(mode),
                                       travel * _UNIT_MM,
                                       None if i1 is None else i1 * _UNIT_MM,
                                       None if i2 is None else i2 * _UNIT_MM)
@@ -735,7 +736,7 @@ class Api:
         if mode not in self._TRIGGER_MODES:
             return {"ok": False, "error": f"invalid trigger mode {mode}"}
         travel_mm = self._clamp_mm("travelRange", travel_mm)
-        if mode != 0:
+        if mode not in (0, 98, 99):
             rt_press_mm = self._clamp_mm("rtRange", rt_press_mm)
             rt_release_mm = self._clamp_mm("rtRange", rt_release_mm)
             cfg = (mode,
@@ -743,14 +744,11 @@ class Api:
                    _mm_to_raw(rt_press_mm),
                    _mm_to_raw(rt_release_mm))
         else:
-            cfg = (0, _mm_to_raw(travel_mm), None, None)
+            cfg = (mode, _mm_to_raw(travel_mm), None, None)
         for i in idxs:
             self._trigger_state[i] = cfg
         try:
-            if mode == 0:
-                with self._reader_paused():
-                    self._flush_triggers(edited_idxs=idxs)
-            else:
+            with self._reader_paused():
                 self._flush_triggers(edited_idxs=idxs)
             return {"ok": True, "keys": len(idxs), "idxs": sorted(idxs)}
         except Exception as e:
@@ -794,11 +792,13 @@ class Api:
         except Exception as e:
             return self._fail(e)
 
-    def set_deadband_codes(self, codes, top_mm=0.04, bottom_mm=0.05):
+    def set_deadband_codes(self, codes, top_mm=0.20, bottom_mm=0.20):
         if not self.km:
             return {"ok": False, "error": "no keymap"}
         idxs = self.km.indices_for_codes(codes) if codes else []
         scope = getattr(self.driver, "DEADBAND_SCOPE", "per-key")
+        if scope == "global" and not idxs:
+            idxs = list(getattr(self.km, "by_index", {}).keys())
         if not idxs and scope != "global":
             return {"ok": False, "error": "no keys"}
         top_mm = self._clamp_mm("deadzoneRange", top_mm)
@@ -1699,7 +1699,7 @@ def main():
     tray_ctl.main_window = window
     tray_ctl.main_visible = not minimized
     window.events.closing += tray_ctl.on_main_closing
-    api.tray = tray_ctl
+    api._tray = tray_ctl
     try:
         webview.settings['OPEN_DEVTOOLS_IN_DEBUG'] = False
     except Exception:

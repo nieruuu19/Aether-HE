@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -34120,6 +34120,8 @@
     actuationPoint = 1.70,
     rtPress = 0.05,
     rtRelease = 0.05,
+    deadTop = 0.20,
+    deadBottom = 0.20,
     selected = false,
     highlighted = false,
     mode = "keymap",
@@ -34131,7 +34133,9 @@
     onMouseEnter = () => {},
     onContextMenu = () => {}
   }) => {
-    const actuated = depth >= actuationPoint && actuationPoint > 0;
+    const hwTriggered = Math.round((Number(depth) % 1) * 10000) === 1;
+    const cleanDepth = Number(depth) - (hwTriggered ? 0.0001 : 0);
+    const actuated = hwTriggered || (cleanDepth >= actuationPoint && actuationPoint > 0);
     const progress = Math.min(1, depth / 4);
 
     // Background depending on mode. In lighting mode each key shows its real
@@ -34195,30 +34199,22 @@
     }, displayLines[0])) : /*#__PURE__*/React.createElement("span", {
       className: `text-[11px] font-medium tracking-wide
                             ${layer === "fn" && fnLabel ? "text-[var(--accent)]" : actuated ? "text-white" : "text-[var(--text)]"}`
-    }, displayLabel)), mode === "actuation" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-      "aria-hidden": true,
-      className: "absolute left-1 right-1 bottom-[3px] h-[3px] rounded-sm pointer-events-none z-0",
-      style: {
-        background: `linear-gradient(90deg,
-                    hsl(${Math.max(0, 180 - actuationPoint * 45)} 80% 55%) 0%,
-                    hsl(${Math.max(0, 180 - actuationPoint * 45)} 80% 55%) ${Math.min(100, actuationPoint / 4 * 100)}%,
-                    rgba(255,255,255,0.06) ${Math.min(100, actuationPoint / 4 * 100)}%,
-                    rgba(255,255,255,0.06) 100%)`
-      }
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute bottom-[7px] inset-x-1 z-10 flex items-end justify-between"
+    }, displayLabel)), mode === "deadband" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "absolute top-[3px] left-[4px] z-10 font-mono text-[8.5px] font-bold text-[#4ade80] leading-none tracking-tighter"
+    }, Number(typeof deadTop !== "undefined" && deadTop != null ? deadTop : 0.20).toFixed(2).replace(/0$/, "")), /*#__PURE__*/React.createElement("span", {
+      className: "absolute bottom-[3px] left-[4px] z-10 font-mono text-[8.5px] font-bold text-[#38bdf8] leading-none tracking-tighter"
+    }, Number(typeof deadBottom !== "undefined" && deadBottom != null ? deadBottom : 0.20).toFixed(2).replace(/0$/, ""))), mode === "actuation" && actuationPoint != null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "absolute top-[3px] right-[4px] z-10 font-mono text-[8.5px] font-bold text-[#4ade80] leading-none tracking-tighter"
+    }, Number(actuationPoint).toFixed(2)), (rtPress > 0 || rtRelease > 0) && /*#__PURE__*/React.createElement("div", {
+      className: "absolute bottom-[3px] inset-x-[4px] z-10 flex items-center justify-between leading-none"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[10px] font-semibold text-[var(--text)] leading-none"
-    }, actuationPoint.toFixed(2)), (rtPress > 0 || rtRelease > 0) && /*#__PURE__*/React.createElement("div", {
-      className: "flex gap-1 leading-none"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[8.5px] text-rose-300/90"
-    }, rtPress.toFixed(2)), /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[8.5px] text-emerald-300/90"
-    }, rtRelease.toFixed(2))))), mode === "actuation" && /*#__PURE__*/React.createElement("span", {
-      className: "absolute top-1 right-1 z-10 font-mono text-[8px] text-[var(--accent)]/90"
-    }, (depth < 0.05 ? 0 : depth).toFixed(2)));
-  }, (prev, next) => prev.code === next.code && prev.layer === next.layer && prev.depth === next.depth && prev.actuationPoint === next.actuationPoint && prev.rtPress === next.rtPress && prev.rtRelease === next.rtRelease && prev.selected === next.selected && prev.highlighted === next.highlighted && prev.mode === next.mode && prev.calibrating === next.calibrating && prev.calibrated === next.calibrated && prev.ledColor === next.ledColor);
+      className: "font-mono text-[8px] font-semibold text-[#38bdf8] tracking-tighter"
+    }, Number(rtPress).toFixed(2)), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[8px] font-semibold text-[#fb923c] tracking-tighter"
+    }, Number(rtRelease).toFixed(2)))), mode === "actuation" && depth >= 0.05 && /*#__PURE__*/React.createElement("span", {
+      className: "absolute bottom-[3px] right-[4px] z-20 px-1 rounded bg-black/80 font-mono text-[8.5px] font-bold text-[var(--accent)]"
+    }, depth.toFixed(2)));
+  }, (prev, next) => prev.code === next.code && prev.layer === next.layer && prev.depth === next.depth && prev.actuationPoint === next.actuationPoint && prev.rtPress === next.rtPress && prev.rtRelease === next.rtRelease && prev.deadTop === next.deadTop && prev.deadBottom === next.deadBottom && prev.selected === next.selected && prev.highlighted === next.highlighted && prev.mode === next.mode && prev.calibrating === next.calibrating && prev.calibrated === next.calibrated && prev.ledColor === next.ledColor);
 
   /* Top "WIN 68 HE MAX" pill */
   const DevicePill = ({
@@ -34313,7 +34309,7 @@
       connected: true
     })), /*#__PURE__*/React.createElement("div", {
       className: "flex items-start justify-center gap-4"
-    }, /*#__PURE__*/React.createElement("div", {
+    }, leftSlot && /*#__PURE__*/React.createElement("div", {
       className: "shrink-0 w-[110px] pt-2 flex flex-col gap-1.5"
     }, leftSlot), /*#__PURE__*/React.createElement("div", {
       className: "relative w-full max-w-[960px] rounded-2xl border border-[var(--line)] bg-gradient-to-b from-white/[0.025] to-black/30 p-3.5 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.8)]"
@@ -34328,7 +34324,10 @@
         gridTemplateColumns: "repeat(60, minmax(0, 1fr))"
       }
     }, row.map(([label, units, code, fnLabel]) => {
-      const override = perKeyOverride?.[code] || {};
+      window.__liveDepths = depths; window.__perKeyOverride = perKeyOverride;
+      const rawOv = perKeyOverride?.[code];
+      const override = (rawOv && typeof rawOv === "object") ? rawOv : (typeof rawOv === "number" ? { actuation: rawOv, touchMode: 1 } : {});
+      const hasCustom = (override.touchMode === 1 || override.touchMode === 2);
       return /*#__PURE__*/React.createElement(Key, {
         key: code,
         label: label,
@@ -34337,9 +34336,11 @@
         fnLabel: fnLabel,
         layer: layer,
         depth: depths[code] || 0,
-        actuationPoint: override.actuation ?? actuationPoint,
-        rtPress: override.rtPress ?? rtPress,
-        rtRelease: override.rtRelease ?? rtRelease,
+        actuationPoint: hasCustom ? override.actuation : null,
+        rtPress: override.touchMode === 2 ? (override.rtPress ?? 0) : 0,
+        rtRelease: override.touchMode === 2 ? (override.rtRelease ?? 0) : 0,
+        deadTop: override.deadTop != null ? override.deadTop : 0.20,
+        deadBottom: override.deadBottom != null ? override.deadBottom : 0.20,
         selected: selectedKeys.has(code),
         mode: mode,
         calibrating: calibrating,
@@ -34354,13 +34355,9 @@
           return cur;
         })
       });
-    }))))), /*#__PURE__*/React.createElement("div", {
+    }))))), rightSlot && /*#__PURE__*/React.createElement("div", {
       className: "shrink-0 w-[110px] pt-2 flex flex-col gap-1.5 items-end"
-    }, mode === "actuation" && liveDepths && /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-faint)] whitespace-nowrap"
-    }, "Live \xB7 ", /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--accent)]"
-    }, (liveMax < 0.05 ? 0 : liveMax).toFixed(2), "mm")), rightSlot)), /*#__PURE__*/React.createElement("div", {
+    }, rightSlot)), /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col items-center mt-3 gap-1"
     }, /*#__PURE__*/React.createElement("button", {
       className: "grid place-items-center w-7 h-7 rounded-full border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] transition-colors",
@@ -34441,21 +34438,61 @@
     value,
     min,
     max,
-    step,
+    step = 0.01,
     onChange,
     unit = "",
     color = "accent"
   }) => {
-    const pct = (value - min) / (max - min) * 100;
+    const decimals = step < 0.1 ? 2 : (step < 1 ? 1 : 0);
+    const numVal = Number(value) || 0;
+    const pct = Math.min(100, Math.max(0, ((numVal - min) / (max - min)) * 100));
+    const [focused, setFocused] = React.useState(false);
+    const [draft, setDraft] = React.useState(() => numVal.toFixed(decimals));
+    const inputRef = React.useRef(null);
+
+    React.useEffect(() => {
+      if (!focused) {
+        setDraft(numVal.toFixed(decimals));
+      }
+    }, [numVal, decimals, focused]);
+
+    const commitDraft = rawStr => {
+      const cleaned = String(rawStr).replace(/[^0-9.]/g, "");
+      const parsed = parseFloat(cleaned);
+      if (!Number.isNaN(parsed)) {
+        const clamped = Math.min(max, Math.max(min, parsed));
+        const factor = Math.pow(10, decimals);
+        const finalVal = Math.round(clamped * factor) / factor;
+        onChange(finalVal);
+        setDraft(finalVal.toFixed(decimals));
+      } else {
+        setDraft(numVal.toFixed(decimals));
+      }
+    };
+
+    const stepBy = delta => {
+      const factor = Math.pow(10, decimals);
+      const next = Math.min(max, Math.max(min, Math.round((numVal + delta) * factor) / factor));
+      onChange(next);
+      setDraft(next.toFixed(decimals));
+    };
+
     return /*#__PURE__*/React.createElement("div", null, label && /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between mb-2"
     }, /*#__PURE__*/React.createElement("span", {
       className: "font-display text-[12px] uppercase tracking-[0.18em] text-[var(--text-dim)]"
     }, label), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-baseline gap-1.5"
+      className: "flex items-baseline gap-1.5 cursor-text",
+      onClick: () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      },
+      title: "Click to type exact value"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[14px] text-[var(--accent)]"
-    }, Number(value).toFixed(step < 1 ? 2 : 0)), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[14px] text-[var(--accent)] hover:underline"
+    }, numVal.toFixed(decimals)), /*#__PURE__*/React.createElement("span", {
       className: "font-mono text-[10px] text-[var(--text-faint)] uppercase tracking-[0.18em]"
     }, unit))), /*#__PURE__*/React.createElement("input", {
       type: "range",
@@ -34463,12 +34500,66 @@
       min: min,
       max: max,
       step: step,
-      value: value,
+      value: numVal,
       style: {
         "--pct": pct + "%"
       },
       onChange: e => onChange(parseFloat(e.target.value))
-    }));
+    }), unit === "mm" && /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => stepBy(-step),
+      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] font-mono text-xs"
+    }, "\u2212"), /*#__PURE__*/React.createElement("div", {
+      className: `relative flex items-center px-2.5 h-7 rounded-md border bg-black/30 transition-all ${focused ? "border-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "border-[var(--line)] hover:border-[var(--accent)]/50"}`
+    }, /*#__PURE__*/React.createElement("input", {
+      ref: inputRef,
+      type: "text",
+      inputMode: "decimal",
+      value: focused ? draft : numVal.toFixed(decimals),
+      onFocus: e => {
+        setFocused(true);
+        setDraft(numVal.toFixed(decimals));
+        const el = e.target;
+        setTimeout(() => { try { el.select(); } catch (_) {} }, 0);
+      },
+      onClick: e => {
+        e.stopPropagation();
+      },
+      onChange: e => {
+        e.stopPropagation();
+        setDraft(e.target.value);
+      },
+      onKeyDown: e => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          commitDraft(draft);
+          e.target.blur();
+        } else if (e.key === "Escape") {
+          setDraft(numVal.toFixed(decimals));
+          setFocused(false);
+          e.target.blur();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          stepBy(step);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          stepBy(-step);
+        }
+      },
+      onBlur: () => {
+        setFocused(false);
+        commitDraft(draft);
+      },
+      className: "w-12 bg-transparent font-mono text-[12px] text-[var(--text)] text-right outline-none select-all pr-1"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[11px] text-[var(--text-faint)] select-none pointer-events-none"
+    }, unit)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => stepBy(step),
+      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] font-mono text-xs"
+    }, "+")));
   };
   const ToolbarButton = ({
     children,
@@ -34889,7 +34980,7 @@
       className: `absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all
                                 ${travelTest ? "left-[20px] bg-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "left-0.5 bg-slate-400"}`
     }))), /*#__PURE__*/React.createElement(SwitchRender, {
-      depth: travelTest ? liveDepth : actuation,
+      depth: travelTest ? liveMax : 0,
       actuation: actuation
     })), /*#__PURE__*/React.createElement("div", {
       className: "glass p-5"
@@ -34910,20 +35001,10 @@
       value: actuation,
       min: 0.1,
       max: 3.4,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setActuation
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-2 mt-2"
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => setActuation(Math.max(0.1, actuation - 0.05)),
-      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
-    }, "\u2212"), /*#__PURE__*/React.createElement("div", {
-      className: "px-3 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] grid place-items-center font-mono text-[12px] text-[var(--text)]"
-    }, actuation.toFixed(2), " mm"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => setActuation(Math.min(4.0, actuation + 0.05)),
-      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
-    }, "+"))), /*#__PURE__*/React.createElement("label", {
+    })), /*#__PURE__*/React.createElement("label", {
       className: "flex items-center gap-2 cursor-pointer select-none mb-3"
     }, /*#__PURE__*/React.createElement("span", {
       className: `w-4 h-4 rounded border grid place-items-center transition
@@ -34945,43 +35026,58 @@
       className: "text-[11.5px] text-[var(--text-faint)] leading-relaxed mb-4"
     }, "Rapid Trigger dynamically actuates and resets your key based on your intent \u2014 perfect for counter-strafing and rebound presses."), rtEnabled && /*#__PURE__*/React.createElement("div", {
       className: "mt-4 p-4 rounded-lg border border-[var(--accent)]/20 bg-[var(--accent)]/[0.05] space-y-4"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-between pb-3 border-b border-[var(--line)]"
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "flex items-center gap-2 cursor-pointer select-none"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: `w-4 h-4 rounded border grid place-items-center transition ${rtContinuous ? "border-[var(--accent)] bg-[var(--accent)]/20" : "border-[var(--line)] bg-white/[0.02]"}`,
-      onClick: () => setRtContinuous(!rtContinuous)
-    }, rtContinuous && /*#__PURE__*/React.createElement(ICheck, {
-      size: 10,
-      className: "text-[var(--accent)]"
-    })), /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: rtContinuous,
-      onChange: e => setRtContinuous(e.target.checked),
-      className: "sr-only"
-    }), /*#__PURE__*/React.createElement("span", {
-      className: "font-display text-[11px] uppercase tracking-[0.15em] text-[var(--text)]"
-    }, "Continuous Rapid Trigger"), /*#__PURE__*/React.createElement(Chip, {
-      color: rtContinuous ? "accent" : "neutral"
-    }, rtContinuous ? "CONTINUOUS (0.10MM)" : "BASIC")), /*#__PURE__*/React.createElement("span", {
-      className: "text-[11px] text-[var(--text-faint)]"
-    }, rtContinuous ? "Active across full keystroke until fully released" : "Active only below actuation point")), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement(() => {
+      const [cont, setCont] = React.useState(() => !!window.__rtContinuous);
+      const choose = (val) => {
+        const nextCont = !!val;
+        if (!nextCont && window.__rtContinuous) {
+          window.__savedContDeadTop = ctx.deadTop ?? 0.20;
+          window.__savedContDeadBottom = ctx.deadBottom ?? 0.20;
+        } else if (nextCont && !window.__rtContinuous) {
+          const restoredTop = window.__savedContDeadTop != null ? window.__savedContDeadTop : 0.20;
+          const restoredBot = window.__savedContDeadBottom != null ? window.__savedContDeadBottom : 0.20;
+          if (ctx.setDeadTop) ctx.setDeadTop(restoredTop);
+          if (ctx.setDeadBottom) ctx.setDeadBottom(restoredBot);
+        }
+        window.__rtContinuous = nextCont;
+        setCont(nextCont);
+        window.dispatchEvent(new CustomEvent("aether:rt-mode-change", { detail: { continuous: nextCont } }));
+      };
+      return /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-col gap-2 pb-3 border-b border-[var(--line)]"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between gap-3"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "font-display text-[11px] uppercase tracking-[0.15em] text-[var(--text)]"
+      }, "Rapid Trigger Mode"), /*#__PURE__*/React.createElement("div", {
+        className: "inline-flex rounded-md border border-[var(--line)] bg-black/30 p-0.5 gap-1"
+      }, /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => choose(false),
+        className: `px-2.5 py-1 rounded text-[10.5px] font-mono uppercase tracking-[0.12em] transition ${!cont ? "bg-[var(--accent)] text-black font-semibold shadow-sm" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+      }, "Basic RT"), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => choose(true),
+        className: `px-2.5 py-1 rounded text-[10.5px] font-mono uppercase tracking-[0.12em] transition ${cont ? "bg-[var(--accent)] text-black font-semibold shadow-sm" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+      }, "Continuous RT"))), /*#__PURE__*/React.createElement("span", {
+        className: "text-[11px] text-[var(--text-faint)]"
+      }, cont ? "Continuous RT: Active across full keystroke (0.10mm-3.40mm) until key is completely released." : "Basic RT: Activates at your actuation point and immediately resets as soon as the key rises above it."));
+    }), /*#__PURE__*/React.createElement("div", {
       className: "grid grid-cols-2 gap-5"
     }, /*#__PURE__*/React.createElement(Slider, {
       label: "Press Sensitivity",
       value: rtPress,
-      min: 0.05,
+      min: 0.01,
       max: 2.0,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setRtPress
     }), /*#__PURE__*/React.createElement(Slider, {
       label: "Release Sensitivity",
       value: rtRelease,
-      min: 0.05,
+      min: 0.01,
       max: 2.0,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setRtRelease
     }))), /*#__PURE__*/React.createElement("div", {
@@ -35150,51 +35246,141 @@
     }, i + 1), /*#__PURE__*/React.createElement("span", null, step))))))));
   };
   const SwitchRender = ({
-    depth,
-    actuation
+    depth = 0,
+    actuation = 2.0
   }) => {
-    // Stylized magnetic switch: bottom housing, stem moves with depth
-    const stemY = Math.min(40, depth / 4 * 40); // 0..40px push-down
+    const dMap = window.__liveDepths || {};
+    const ovMap = window.__perKeyOverride || {};
+    let activeCode = null;
+    let bestRaw = 0;
+    let maxD = 0;
+
+    if (Number(depth) > 0) {
+      for (const [k, v] of Object.entries(dMap)) {
+        const rv = Number(v) || 0;
+        const cd = Math.floor((rv + 1e-6) * 100) / 100;
+        if (cd > maxD || (cd === maxD && rv > bestRaw)) {
+          maxD = cd;
+          bestRaw = rv;
+          activeCode = k;
+        }
+      }
+      if (maxD === 0) {
+        bestRaw = Number(depth) || 0;
+        maxD = Math.floor((bestRaw + 1e-6) * 100) / 100;
+      }
+    }
+
+    const cleanDepth = maxD;
+    const hwTriggered = Math.abs(bestRaw - cleanDepth) > 0.00004;
+    const globalMm = Number(window.__globalTravelMm) || 2.00;
+    const sliderMm = (actuation != null && Number(actuation) > 0) ? Number(actuation) : globalMm;
+
+    // Look up the physically pressed key's configured actuation point
+    const pressedKeyActMm = (() => {
+      if (!activeCode || cleanDepth <= 0.04) return null;
+      const sc = String(activeCode).replace(/^Key/, "").replace(/^Digit/, "");
+      const kc = sc.length === 1 && /[A-Za-z]/.test(sc) ? "Key" + sc.toUpperCase() : activeCode;
+      const modAliases = {
+        ShiftLeft: ["LShift", "Shift"], LShift: ["ShiftLeft", "Shift"],
+        ShiftRight: ["RShift"], RShift: ["ShiftRight"],
+        ControlLeft: ["LCtrl", "Ctrl"], LCtrl: ["ControlLeft", "Ctrl"],
+        ControlRight: ["RCtrl"], RCtrl: ["ControlRight"],
+        AltLeft: ["LAlt", "Alt"], LAlt: ["AltLeft", "Alt"],
+        AltRight: ["RAlt"], RAlt: ["AltRight"]
+      }[activeCode] || [];
+      let rawCfg = null;
+      for (const cand of [activeCode, kc, sc, sc.toUpperCase(), sc.toLowerCase(), ...modAliases]) {
+        if (ovMap[cand] !== undefined) {
+          rawCfg = ovMap[cand];
+          break;
+        }
+      }
+      if (rawCfg && typeof rawCfg === "object") {
+        const tm = Number(rawCfg.touchMode);
+        const hasCustom = (tm === 1 || tm === 2) || (rawCfg.touchMode === undefined && Number(rawCfg.actuation) > 0);
+        if (hasCustom && Number(rawCfg.actuation) > 0) {
+          return Number(rawCfg.actuation);
+        }
+        return globalMm;
+      }
+      if (typeof rawCfg === "number" && rawCfg > 0) {
+        return rawCfg;
+      }
+      return globalMm;
+    })();
+
+    // Latch the yellow line to the last physically pressed key (so it never snaps back on key release!),
+    // while immediately tracking the slider whenever the user drags the slider or selects a key in the UI.
+    const yellowRef = React.useRef({ mm: sliderMm, prevSlider: sliderMm, prevGlobal: globalMm });
+    if (Math.abs(sliderMm - yellowRef.current.prevSlider) > 0.001) {
+      yellowRef.current.prevSlider = sliderMm;
+      yellowRef.current.mm = sliderMm;
+    } else if (Math.abs(globalMm - yellowRef.current.prevGlobal) > 0.001) {
+      yellowRef.current.prevGlobal = globalMm;
+      yellowRef.current.mm = globalMm;
+    }
+    if (pressedKeyActMm != null) {
+      yellowRef.current.mm = pressedKeyActMm;
+    }
+
+    const keyActMm = yellowRef.current.mm || globalMm;
+    const isActuated = hwTriggered && cleanDepth > 0.04;
+    const stemY = Math.min(40, (cleanDepth / 4.0) * 40);
+    const depthPct = Math.min(100, Math.max(0, (cleanDepth / 4.0) * 100));
+    const actPct = Math.min(100, Math.max(0, (keyActMm / 4.0) * 100));
+
     return /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-4"
+      className: "flex flex-col items-center gap-3 w-full"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-center gap-5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "relative w-[110px] h-[150px] flex-shrink-0"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-0 w-20 h-16 rounded-md bg-gradient-to-b from-emerald-200/20 to-emerald-300/10 border border-emerald-200/15"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-0 w-20 h-16 rounded-md transition-all duration-75 border ${isActuated ? "bg-gradient-to-b from-emerald-400/40 to-emerald-500/25 border-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.55)]" : "bg-gradient-to-b from-emerald-200/20 to-emerald-300/10 border-emerald-200/15"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-2 w-14 h-4 rounded-sm bg-slate-900/60 border border-white/10"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-2 w-14 h-4 rounded-sm border transition-colors duration-75 ${isActuated ? "bg-emerald-950/90 border-emerald-400/60" : "bg-slate-900/60 border-white/10"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 w-8 rounded-t-sm bg-slate-100/95 border border-white/30 shadow-[0_2px_6px_rgba(0,0,0,0.4)]",
+      className: `absolute left-1/2 -translate-x-1/2 w-8 rounded-t-sm border transition-colors duration-75 shadow-[0_2px_6px_rgba(0,0,0,0.4)] ${isActuated ? "bg-emerald-300 border-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.8)]" : "bg-slate-100/95 border-white/30"}`,
       style: {
         top: 18 + stemY,
         height: 60
       }
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 top-1 w-3 h-3 bg-slate-300 rounded-sm"
+      className: `absolute left-1/2 -translate-x-1/2 top-1 w-3 h-3 rounded-sm ${isActuated ? "bg-emerald-600" : "bg-slate-300"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-1 w-1 h-1 bg-rose-500 rounded-full"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-1 w-1.5 h-1.5 rounded-full ${isActuated ? "bg-emerald-950" : "bg-rose-500"}`
     })), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-6 w-12 h-12 rounded-full blur-2xl bg-[var(--accent)]/30 opacity-70"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-6 w-14 h-14 rounded-full blur-2xl transition-opacity duration-75 ${isActuated ? "bg-emerald-400/60 opacity-100" : "bg-[var(--accent)]/30 opacity-70"}`
     })), /*#__PURE__*/React.createElement("div", {
-      className: "relative flex flex-col justify-between h-[150px] text-right pr-1"
+      className: "relative flex flex-col justify-between h-[150px] text-right pr-2"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute -right-1 inset-y-0 w-px bg-white/10"
+      className: "absolute -right-1.5 top-[7px] bottom-[7px] w-[6px] rounded-full bg-white/[0.06] overflow-hidden border border-white/10"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-full transition-all duration-75 rounded-full ${isActuated ? "bg-emerald-400 shadow-[0_0_10px_#34d399]" : "bg-[var(--accent)]/70"}`,
+      style: { height: `${depthPct}%` }
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "absolute -right-2.5 w-3.5 h-[2px] bg-amber-400 shadow-[0_0_6px_#fbbf24] pointer-events-none z-10 transition-all duration-75 ease-out",
+      style: { top: `calc(7px + (100% - 14px) * ${actPct / 100} - 1px)` },
+      title: `Actuation Point: ${keyActMm.toFixed(2)}mm`
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `absolute -right-3 w-4 h-[3px] rounded-full pointer-events-none z-20 transition-all duration-75 ${isActuated ? "bg-emerald-300 shadow-[0_0_8px_#4ade80]" : "bg-white shadow-[0_0_4px_#fff]"}`,
+      style: { top: `calc(7px + (100% - 14px) * ${depthPct / 100} - 1.5px)` }
     }), [0, 1, 2, 3, 4].map(mm => /*#__PURE__*/React.createElement("div", {
       key: mm,
-      className: "flex items-center gap-2"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[10px] text-[var(--text-dim)]"
-    }, mm, ".0mm"), /*#__PURE__*/React.createElement("span", {
-      className: "w-2 h-px bg-white/30"
-    }))), /*#__PURE__*/React.createElement("div", {
-      className: "absolute right-0 w-3 h-px bg-[var(--accent)] shadow-[0_0_8px_var(--accent-glow)]",
-      style: {
-        top: `${depth / 4 * 100}%`
-      }
-    })));
+      className: "relative flex items-center justify-end gap-1.5 text-[10px] line-height-none font-mono text-[var(--text-faint)]"
+    }, /*#__PURE__*/React.createElement("span", null, mm.toFixed(1), "mm"), /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-px bg-white/25"
+    }))))), /*#__PURE__*/React.createElement("div", {
+      className: "w-full flex flex-col items-center gap-1 pt-1 border-t border-[var(--line)]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-full py-1 px-2.5 rounded font-mono text-[10.5px] font-bold uppercase tracking-[0.14em] text-center border transition-all duration-75 ${isActuated ? "bg-emerald-400/20 border-emerald-400 text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.35)]" : "bg-white/[0.02] border-[var(--line)] text-[var(--text-faint)]"}`
+    }, isActuated ? "\u25CF ACTUATED \u00B7 KEY TRIGGERED" : "\u25CB RELEASED \u00B7 IDLE"), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between w-full px-1 text-[10px] font-mono text-[var(--text-dim)]"
+    }, /*#__PURE__*/React.createElement("span", null, "DEPTH:"), /*#__PURE__*/React.createElement("span", {
+      className: isActuated ? "text-emerald-300 font-bold" : "text-[var(--text)]"
+    }, cleanDepth.toFixed(2), " mm"))));
   };
-
-  /* Selection toolbar (visible above keyboard when in actuation mode) */
   const ActuationToolbar = ({
     onSelectAll,
     onSelectInvert,
@@ -37582,7 +37768,7 @@
   const rangeOr = (r, fallback) => Array.isArray(r) && r.length === 2 && isFinite(r[0]) && isFinite(r[1]) ? r : fallback;
 
   /* ===== Travel widget (actuation point + rapid trigger + live switch render) ===== */
-  function TravelWidget(ctx) {
+    function TravelWidget(ctx) {
     const {
       actuation,
       setActuation,
@@ -37599,14 +37785,65 @@
       applyActuation
     } = ctx;
     const selectedCount = selectedKeys ? selectedKeys.size : 0;
+    const [rtCont, setRtCont] = React.useState(() => !!window.__rtContinuous);
+    const [gTravel, setGTravel] = React.useState(() => Number(window.__globalTravelMm) || 2.00);
+
+    const chooseRtMode = (val) => {
+      const nextCont = !!val;
+      window.__rtContinuous = nextCont;
+      setRtCont(nextCont);
+    };
+
+    // Only sync sliders & RT mode when the user changes which key is selected!
+    // (NOT when perKeyActuation updates after Apply, so we never clobber the user's toggle)
+    const selectedKeySig = React.useMemo(
+      () => (selectedKeys ? Array.from(selectedKeys).join(",") : ""),
+      [selectedKeys]
+    );
+
+    React.useEffect(() => {
+      if (!selectedKeys || selectedKeys.size === 0 || !ctx.perKeyActuation) return;
+      const code = Array.from(selectedKeys)[selectedKeys.size - 1];
+      const ov = ctx.perKeyActuation[code];
+      if (ov && typeof ov === "object") {
+        const tMode = Number(ov.touchMode) || 0;
+        const actVal = Number(ov.actuation) || (tMode === 0 ? 2.00 : 1.50);
+        ctx.setActuation(actVal);
+        if (tMode === 2) {
+          ctx.setRtEnabled(true);
+          ctx.setRtPress(Number(ov.rtPress) || 0.05);
+          ctx.setRtRelease(Number(ov.rtRelease) || 0.05);
+          const isKeyCont = !!ov.rtContinuous;
+          window.__rtContinuous = isKeyCont;
+          setRtCont(isKeyCont);
+        } else {
+          ctx.setRtEnabled(false);
+        }
+      } else if (typeof ov === "number") {
+        ctx.setActuation(ov);
+        ctx.setRtEnabled(false);
+      } else {
+        ctx.setActuation(2.00);
+        ctx.setRtEnabled(false);
+      }
+    }, [selectedKeySig]);
+
+    React.useEffect(() => {
+      if (!ctx.perKeyActuation) return;
+      for (const v of Object.values(ctx.perKeyActuation)) {
+        if (v && typeof v === "object" && v.touchMode === 0 && v.actuation) {
+          const val = Number(v.actuation);
+          window.__globalTravelMm = val;
+          setGTravel(val);
+          break;
+        }
+      }
+    }, [ctx.perKeyActuation]);
+
     const scope = selectedCount > 0 ? `${selectedCount} selected key${selectedCount > 1 ? "s" : ""}` : "no keys (select some)";
     const canApply = selectedCount > 0;
     const [confirm, flash] = useFlash();
 
-    /* Board awareness (additive): ranges from the registry actuation block when
-       present (the Win60's block equals today's hardcoded values), rapid-trigger
-       gated on the capability flag ("wip" = source-only = unavailable; unknown =
-       fail-open = render as today). */
     const bctx = boardCtxOf(ctx);
     const bact = bctx.actuation;
     const boardName = bctx.board && bctx.board.name || "this board";
@@ -37614,14 +37851,34 @@
     const [rtMin, rtMax] = rangeOr(bact && bact.rtRange, [0.05, 2.0]);
     const rtState = bctx.capState ? bctx.capState("rapidTrigger") : "unknown";
     const rtAvailable = rtState === "yes" || rtState === "unknown";
+
+    const applyGlobal = async (val) => {
+      const clamped = Math.max(0.10, Math.min(3.40, Math.round(Number(val) * 100) / 100));
+      window.__globalTravelMm = clamped;
+      setGTravel(clamped);
+      if (!ctx.connected) return;
+      const allC = (window.AetherKeyboard && window.AetherKeyboard.KB_ROWS || []).flat().map(k => k[2]);
+      await ctx.apiCall("set_trigger_codes", allC, clamped, 0, 0, 98);
+      if (ctx.refreshPerKeyActuation) ctx.refreshPerKeyActuation();
+      flash(`Global Travel set to ${clamped.toFixed(2)}mm (all non-custom keys)`);
+    };
+
     const handleApplyTravel = () => {
       if (!canApply || !applyActuation) return;
+      window.__rtContinuous = rtCont;
       applyActuation();
-      const rt = rtEnabled && rtAvailable ? ` · RT press ${rtPress.toFixed(2)}mm / release ${rtRelease.toFixed(2)}mm` : "";
+      const rt = rtEnabled && rtAvailable ? ` ? ${rtCont ? "Continuous RT" : "Basic RT"} press ${rtPress.toFixed(2)}mm / release ${rtRelease.toFixed(2)}mm` : "";
       flash(`Wrote ${actuation.toFixed(2)}mm to ${selectedCount} key${selectedCount === 1 ? "" : "s"}${rt}`);
     };
+
     return /*#__PURE__*/React.createElement("div", {
-      className: "grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-5"
+      className: "grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-5",
+      onPointerDownCapture: () => {
+        if (window.__actBoardViewMode !== "actuation") {
+          window.__actBoardViewMode = "actuation";
+          window.dispatchEvent(new CustomEvent("aether:board-view-mode", { detail: "actuation" }));
+        }
+      }
     }, /*#__PURE__*/React.createElement("div", {
       className: "glass p-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -37630,19 +37887,13 @@
       className: "font-display text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]"
     }, "Travel Test"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setTravelTest(!travelTest),
-      className: `relative w-10 h-5 rounded-full border transition-colors
-                        ${travelTest ? "bg-[var(--accent)]/30 border-[var(--accent)]/60" : "bg-white/[0.04] border-[var(--line)]"}`
+      className: `relative w-10 h-5 rounded-full border transition-colors ${travelTest ? "bg-[var(--accent)]/30 border-[var(--accent)]/60" : "bg-white/[0.04] border-[var(--line)]"}`
     }, /*#__PURE__*/React.createElement("span", {
-      className: `absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all
-                              ${travelTest ? "left-[20px] bg-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "left-0.5 bg-slate-400"}`
+      className: `absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all ${travelTest ? "left-[20px] bg-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "left-0.5 bg-slate-400"}`
     }))), /*#__PURE__*/React.createElement(SwitchRender, {
-      depth: travelTest ? liveMax : actuation,
+      depth: travelTest ? liveMax : 0,
       actuation: actuation
-    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-      className: "text-[12px] text-[var(--text-dim)] mb-3"
-    }, "Select keys on the board, set the actuation point, then press ", /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--accent)]"
-    }, "Apply"), " \u2014 only the selected keys are written. Nothing is sent while you move the slider."), /*#__PURE__*/React.createElement("div", {
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "mb-5 inline-flex items-center gap-2 px-3 h-7 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/[0.06]"
     }, /*#__PURE__*/React.createElement("span", {
       className: "font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-dim)]"
@@ -37650,29 +37901,38 @@
       className: "font-display text-[11px] uppercase tracking-[0.16em] text-[var(--accent)]"
     }, scope)), /*#__PURE__*/React.createElement("div", {
       className: "mb-5"
-    }, /*#__PURE__*/React.createElement(Slider, {
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "rounded-xl border border-[var(--line)] bg-white/[0.015] p-3.5 space-y-2.5 mb-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-display text-[11.5px] uppercase tracking-[0.16em] text-[var(--text)] font-semibold"
+    }, "Global Travel"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => applyGlobal(gTravel),
+      className: "px-2.5 py-1 rounded border border-[var(--accent)]/40 bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--accent)] transition"
+    }, "Apply Global")), /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] text-[var(--text-faint)] leading-relaxed"
+    }, "Sets the default trigger travel for all unconfigured keys (not displayed on keycaps)."), /*#__PURE__*/React.createElement(Slider, {
+      label: "Global Trigger Travel",
+      value: gTravel,
+      min: travelMin,
+      max: travelMax,
+      step: 0.01,
+      unit: "mm",
+      onChange: v => setGTravel(Math.round(v * 100) / 100)
+    })), /*#__PURE__*/React.createElement(Slider, {
       label: "Key Trigger Travel",
       value: actuation,
       min: travelMin,
       max: travelMax,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setActuation
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-2 mt-2"
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => setActuation(Math.max(travelMin, actuation - 0.05)),
-      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
-    }, "\u2212"), /*#__PURE__*/React.createElement("div", {
-      className: "px-3 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] grid place-items-center font-mono text-[12px] text-[var(--text)]"
-    }, actuation.toFixed(2), " mm"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => setActuation(Math.min(travelMax, actuation + 0.05)),
-      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
-    }, "+"))), rtAvailable ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("label", {
+    })), rtAvailable ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("label", {
       className: "flex items-center gap-2 cursor-pointer select-none mb-3"
     }, /*#__PURE__*/React.createElement("span", {
-      className: `w-4 h-4 rounded border grid place-items-center transition
-                                ${rtEnabled ? "border-[var(--accent)] bg-[var(--accent)]/20" : "border-[var(--line)] bg-white/[0.02]"}`,
+      className: `w-4 h-4 rounded border grid place-items-center transition ${rtEnabled ? "border-[var(--accent)] bg-[var(--accent)]/20" : "border-[var(--line)] bg-white/[0.02]"}`,
       onClick: () => setRtEnabled(!rtEnabled)
     }, rtEnabled && ICheck && /*#__PURE__*/React.createElement(ICheck, {
       size: 10,
@@ -37688,47 +37948,45 @@
       color: "accent"
     }, "RT")), /*#__PURE__*/React.createElement("p", {
       className: "text-[11.5px] text-[var(--text-faint)] leading-relaxed mb-4"
-    }, "Rapid Trigger dynamically actuates and resets your key based on your intent \u2014 perfect for counter-strafing and rebound presses."), rtEnabled && /*#__PURE__*/React.createElement("div", {
+    }, "Rapid Trigger dynamically actuates and resets your key based on your intent — perfect for counter-strafing and rebound presses."), rtEnabled && /*#__PURE__*/React.createElement("div", {
       className: "mt-4 p-4 rounded-lg border border-[var(--accent)]/20 bg-[var(--accent)]/[0.05] space-y-4"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-between pb-3 border-b border-[var(--line)]"
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "flex items-center gap-2 cursor-pointer select-none",
-      onClick: () => { window.__rtContinuous = !window.__rtContinuous; setRtPress(Number((rtPress + 1e-7).toFixed(4))); setTimeout(() => setRtPress(rtPress), 0); }
+      className: "flex flex-col gap-2 pb-3 border-b border-[var(--line)]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3"
     }, /*#__PURE__*/React.createElement("span", {
-      className: `w-4 h-4 rounded border grid place-items-center transition ${window.__rtContinuous ? "border-[var(--accent)] bg-[var(--accent)]/20" : "border-[var(--line)] bg-white/[0.02]"}`
-    }, window.__rtContinuous && /*#__PURE__*/React.createElement(ICheck, {
-      size: 10,
-      className: "text-[var(--accent)]"
-    })), /*#__PURE__*/React.createElement("span", {
       className: "font-display text-[11px] uppercase tracking-[0.15em] text-[var(--text)]"
-    }, "Continuous Rapid Trigger"), /*#__PURE__*/React.createElement(Chip, {
-      color: window.__rtContinuous ? "accent" : "neutral"
-    }, window.__rtContinuous ? "CONTINUOUS (0.10MM)" : "BASIC")), /*#__PURE__*/React.createElement("span", {
+    }, "Rapid Trigger Mode"), /*#__PURE__*/React.createElement("div", {
+      className: "inline-flex rounded-md border border-[var(--line)] bg-black/30 p-0.5 gap-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => chooseRtMode(false),
+      className: `px-2.5 py-1 rounded text-[10.5px] font-mono uppercase tracking-[0.12em] transition ${!rtCont ? "bg-[var(--accent)] text-black font-semibold shadow-sm" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+    }, "Basic RT"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => chooseRtMode(true),
+      className: `px-2.5 py-1 rounded text-[10.5px] font-mono uppercase tracking-[0.12em] transition ${rtCont ? "bg-[var(--accent)] text-black font-semibold shadow-sm" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+    }, "Continuous RT"))), /*#__PURE__*/React.createElement("span", {
       className: "text-[11px] text-[var(--text-faint)]"
-    }, window.__rtContinuous ? "Full keystroke (resets at 0.10mm)" : "Active only below actuation point")), /*#__PURE__*/React.createElement("div", {
+    }, rtCont ? "Continuous RT: Active across full keystroke (0.10mm-3.40mm) until key is completely released." : "Basic RT: Activates at your actuation point and immediately resets as soon as the key rises above it.")), /*#__PURE__*/React.createElement("div", {
       className: "grid grid-cols-2 gap-5"
     }, /*#__PURE__*/React.createElement(Slider, {
       label: "Press Sensitivity",
       value: rtPress,
-      min: 0.05,
+      min: 0.01,
       max: 2.0,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setRtPress
     }), /*#__PURE__*/React.createElement(Slider, {
       label: "Release Sensitivity",
       value: rtRelease,
-      min: 0.05,
+      min: 0.01,
       max: 2.0,
-      step: 0.05,
+      step: 0.01,
       unit: "mm",
       onChange: setRtRelease
-    })))) :
-    /*#__PURE__*/
-    /* Unavailable — same info-box idiom as Dead Band / Switch / Calibration
-       (and the pre-existing Polling readout): bordered ink card, mono body. */
-    React.createElement("div", {
+    })))) : /*#__PURE__*/React.createElement("div", {
       className: "mb-4 p-4 rounded-lg border border-[var(--line)] bg-[rgba(5,11,14,0.5)]"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2 mb-1.5"
@@ -37738,7 +37996,7 @@
       color: "accent"
     }, "RT")), /*#__PURE__*/React.createElement("p", {
       className: "font-mono text-[11px] text-[var(--text-dim)] leading-relaxed"
-    }, rtState === "wip" ? `Rapid trigger is not yet available on ${boardName} — its protocol is known only from vendor driver source and has not been verified on hardware, so Aether will not drive it.` : `${boardName} does not support rapid trigger.`)), /*#__PURE__*/React.createElement("div", {
+    }, rtState === "wip" ? `Rapid trigger is not yet available on ${boardName} ? its protocol is known only from vendor driver source and has not been verified on hardware, so Aether will not drive it.` : `${boardName} does not support rapid trigger.`)), /*#__PURE__*/React.createElement("div", {
       className: "mt-6 flex items-center gap-3"
     }, /*#__PURE__*/React.createElement("button", {
       onClick: handleApplyTravel,
@@ -37764,75 +38022,124 @@
     const selectedCount = selectedKeys ? selectedKeys.size : 0;
     const [confirm, flash] = useFlash();
 
-    /* Board awareness (additive). deadzoneScope "global" means the dead zones
-       live in ONE whole-board config table — a per-key control CANNOT work on
-       that hardware, so the widget becomes a single board-wide control. The
-       Win60 declares "per-key" (and unknown boards declare nothing), so both
-       take the original per-key path unchanged. */
-    const bctx = boardCtxOf(ctx);
-    const bact = bctx.actuation;
-    const boardName = bctx.board && bctx.board.name || "this board";
-    const globalScope = !!(bact && bact.deadzoneScope === "global");
-    const [dzMin, dzMax] = rangeOr(bact && bact.deadzoneRange, [0.0, 0.5]);
-    const dzState = bctx.capState ? bctx.capState("deadzone") : "unknown";
-    const canApply = globalScope ? true : selectedCount > 0;
-    const handleApplyDead = () => {
-      if (!canApply || !applyDeadband) return;
-      applyDeadband();
-      flash(`Wrote dead band ${(deadTop ?? 0.04).toFixed(2)}/${(deadBottom ?? 0.05).toFixed(2)}mm to ${globalScope ? "the whole board" : `${selectedCount} key${selectedCount === 1 ? "" : "s"}`}`);
+    // Check the APPLIED state of the selected keys from ctx.perKeyActuation
+    const isBasicRtLocked = React.useMemo(() => {
+      if (!selectedKeys || selectedKeys.size === 0 || !ctx.perKeyActuation) return false;
+      for (const code of selectedKeys) {
+        const ov = ctx.perKeyActuation[code];
+        if (ov && typeof ov === "object" && ov.touchMode === 2 && !ov.rtContinuous) {
+          return true;
+        }
+      }
+      return false;
+    }, [selectedKeys, ctx.perKeyActuation]);
+
+    const selKeySig = React.useMemo(() => (selectedKeys ? Array.from(selectedKeys).join(",") : ""), [selectedKeys]);
+    React.useEffect(() => {
+      if (!selectedKeys || selectedKeys.size === 0 || !ctx.perKeyActuation) return;
+      const code = Array.from(selectedKeys)[selectedKeys.size - 1];
+      const ov = ctx.perKeyActuation[code];
+      if (ov && typeof ov === "object") {
+        const topVal = ov.userDeadTop != null ? ov.userDeadTop : (ov.deadTop != null && ov.deadTop <= 1.0 ? ov.deadTop : 0.20);
+        const botVal = ov.userDeadBottom != null ? ov.userDeadBottom : (ov.deadBottom != null ? ov.deadBottom : 0.20);
+        if (topVal != null && setDeadTop) setDeadTop(Number(topVal));
+        if (botVal != null && setDeadBottom) setDeadBottom(Number(botVal));
+      }
+    }, [selKeySig]);
+
+    const dzMin = 0.00;
+    const dzMax = 1.00;
+    const canApply = selectedCount > 0;
+
+    const activateDeadbandView = () => {
+      if (window.__actBoardViewMode !== "deadband") {
+        window.__actBoardViewMode = "deadband";
+        window.dispatchEvent(new CustomEvent("aether:board-view-mode", { detail: "deadband" }));
+      }
     };
 
-    /* Capability gate: "wip" = decoded from vendor source only, never proven on
-       hardware — do not drive it. The Win60 flag is a hard true (and unknown
-       boards fail open), so this branch never renders there. */
-    if (dzState === "wip" || dzState === "no") {
-      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-        className: "text-[12px] text-[var(--text-dim)] mb-4"
-      }, "Configure the dead-band region near the keycap's rest and bottom-out positions \u2014 noise inside this band is ignored."), /*#__PURE__*/React.createElement("div", {
-        className: "p-4 rounded-lg border border-[var(--line)] bg-[rgba(5,11,14,0.5)] font-mono text-[11px] text-[var(--text-dim)] leading-relaxed"
-      }, dzState === "wip" ? `Dead-band control is not yet available on ${boardName} — its protocol is known only from vendor driver source and has not been verified on hardware, so Aether will not drive it.` : `${boardName} does not support dead-band configuration.`));
-    }
-    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-      className: "text-[12px] text-[var(--text-dim)] mb-5"
-    }, globalScope ? /*#__PURE__*/React.createElement(React.Fragment, null, "Configure the dead-band region near the keycap's rest and bottom-out positions \u2014 noise inside this band is ignored. On ", boardName, " the dead zones are a ", /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--accent)]"
-    }, "single board-wide setting"), ": per-key dead bands are not possible on this hardware, so these values apply to every key at once.") : /*#__PURE__*/React.createElement(React.Fragment, null, "Configure the dead-band region near the keycap's rest and bottom-out positions \u2014 noise inside this band is ignored. Press ", /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--accent)]"
-    }, "Apply"), " to write to the selected keys.")), globalScope && /*#__PURE__*/React.createElement("div", {
-      className: "mb-5 inline-flex items-center gap-2 px-3 h-7 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/[0.06]"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-dim)]"
-    }, "Scope"), /*#__PURE__*/React.createElement("span", {
-      className: "font-display text-[11px] uppercase tracking-[0.16em] text-[var(--accent)]"
-    }, "Whole board \xB7 every key")), /*#__PURE__*/React.createElement("div", {
+    const handleApplyDead = () => {
+      activateDeadbandView();
+      if (!canApply || !applyDeadband) return;
+      window.__savedContDeadTop = deadTop ?? 0.20;
+      window.__savedContDeadBottom = deadBottom ?? 0.20;
+      applyDeadband(deadTop ?? 0.20, deadBottom ?? 0.20);
+      flash(`Wrote dead band ${(deadTop ?? 0.20).toFixed(2)}/${(deadBottom ?? 0.20).toFixed(2)}mm to ${selectedCount} key${selectedCount === 1 ? "" : "s"}`);
+    };
+
+    const handleResetDefaultDead = async () => {
+      activateDeadbandView();
+      if (setDeadTop) setDeadTop(0.20);
+      if (setDeadBottom) setDeadBottom(0.20);
+      if (selectedCount > 0 && applyDeadband) {
+        await applyDeadband(0.20, 0.20);
+        flash(`Reset dead band to 0.20mm (${selectedCount} key${selectedCount === 1 ? "" : "s"})`);
+      } else {
+        const allC = (window.AetherKeyboard && window.AetherKeyboard.KB_ROWS || []).flat().map(k => k[2]);
+        if (ctx.connected && ctx.apiCall) {
+          await ctx.apiCall("set_deadband_codes", allC, 0.20, 0.20);
+          if (ctx.refreshPerKeyActuation) await ctx.refreshPerKeyActuation();
+        }
+        flash(`Reset dead band to 0.20mm (${allC.length} keys)`);
+      }
+    };
+
+    return /*#__PURE__*/React.createElement("div", {
+      onPointerDownCapture: activateDeadbandView
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-[12px] text-[var(--text-dim)] mb-4"
+    }, "To prevent miscontact or broken contact on selected keys, you are advised to set the deadzone to ", /*#__PURE__*/React.createElement("span", {
+      className: "text-[var(--accent)] underline font-semibold cursor-pointer",
+      onClick: handleResetDefaultDead
+    }, "0.2mm")),
+    isBasicRtLocked && /*#__PURE__*/React.createElement("div", {
+      className: "mb-4 px-3 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10 font-mono text-[11px] text-amber-200"
+    }, "Press (Trigger) dead band is locked while Basic RT is applied on the selected key. Disable Rapid Trigger or apply Continuous RT to unlock and restore press dead band."),
+    /*#__PURE__*/React.createElement("div", {
       className: "grid grid-cols-2 gap-6"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: isBasicRtLocked ? "opacity-50 pointer-events-none select-none" : ""
     }, /*#__PURE__*/React.createElement(Slider, {
-      label: "Top Dead Band",
-      value: deadTop ?? 0.04,
+      label: isBasicRtLocked ? "Press (Trigger) [Locked]" : "Press (Trigger)",
+      value: deadTop ?? 0.20,
       min: dzMin,
       max: dzMax,
       step: 0.01,
       unit: "mm",
-      onChange: setDeadTop
-    }), /*#__PURE__*/React.createElement(Slider, {
-      label: "Bottom Dead Band",
-      value: deadBottom ?? 0.05,
+      onChange: v => {
+        if (!isBasicRtLocked) {
+          window.__savedContDeadTop = v;
+          setDeadTop(v);
+        }
+      }
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(Slider, {
+      label: "Release (Reset)",
+      value: deadBottom ?? 0.20,
       min: dzMin,
       max: dzMax,
       step: 0.01,
       unit: "mm",
-      onChange: setDeadBottom
-    })), /*#__PURE__*/React.createElement("div", {
-      className: "mt-6 flex items-center gap-3"
+      onChange: v => {
+        window.__savedContDeadBottom = v;
+        setDeadBottom(v);
+      }
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "mt-6 flex items-center gap-3 flex-wrap"
     }, /*#__PURE__*/React.createElement("button", {
       onClick: handleApplyDead,
       disabled: !canApply,
       className: applyBtnCls(canApply)
-    }, globalScope ? "Apply to whole board" : /*#__PURE__*/React.createElement(React.Fragment, null, "Apply to ", selectedCount || 0, " key", selectedCount === 1 ? "" : "s")), confirm ? /*#__PURE__*/React.createElement(ConfirmToast, {
+    }, /*#__PURE__*/React.createElement(React.Fragment, null, "Apply to ", selectedCount || 0, " key", selectedCount === 1 ? "" : "s")),
+    /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: handleResetDefaultDead,
+      className: "px-3 h-9 rounded-md border border-[var(--line)] bg-white/[0.03] hover:border-[var(--accent)]/50 font-display text-[11px] uppercase tracking-[0.14em] text-[var(--text-dim)] hover:text-[var(--text)] transition"
+    }, "Default (0.20mm)"),
+    confirm ? /*#__PURE__*/React.createElement(ConfirmToast, {
       confirm: confirm
     }) : /*#__PURE__*/React.createElement("span", {
       className: "font-mono text-[10.5px] uppercase tracking-[0.18em] text-[var(--text-faint)]"
-    }, globalScope ? "one pair of values for every key — key selection is ignored" : canApply ? "writes only the selected keys" : "select keys on the board to enable")));
+    }, canApply ? "writes selected keys" : "select keys on the board to enable")));
   }
 
   /* ===== Switch widget ===== */
@@ -38028,12 +38335,146 @@
       className: "shrink-0 grid place-items-center w-5 h-5 rounded border border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--accent)] font-mono text-[10px]"
     }, i + 1), /*#__PURE__*/React.createElement("span", null, step)))));
   }
+    const ActuationBoardWidget = (ctx) => {
+    const KB = window.AetherKeyboard || {};
+    const KeyboardPanel = KB.KeyboardPanel;
+    const allCodes = React.useMemo(() => (KB.KB_ROWS || []).flat().map(k => k[2]), []);
+    const selectPreset = (codes) => ctx.setSelectedKeys(new Set(codes));
+    const [boardMode, setBoardMode] = React.useState(() => window.__actBoardViewMode || "actuation");
+
+    React.useEffect(() => {
+      const handler = (e) => setBoardMode(e.detail || "actuation");
+      window.addEventListener("aether:board-view-mode", handler);
+      return () => window.removeEventListener("aether:board-view-mode", handler);
+    }, []);
+
+    const switchView = (m) => {
+      window.__actBoardViewMode = m;
+      setBoardMode(m);
+    };
+
+    return /*#__PURE__*/React.createElement("div", {
+      className: "w-full h-full flex flex-col justify-between px-3 py-2 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-2 mb-1.5 px-1 flex-wrap"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3 text-[10px] font-mono uppercase tracking-[0.14em] text-[var(--text-dim)]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "inline-flex rounded border border-[var(--line)] bg-black/30 p-0.5 mr-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => switchView("actuation"),
+      className: `px-2 py-0.5 rounded text-[9.5px] font-mono uppercase transition ${boardMode === "actuation" ? "bg-[var(--accent)] text-black font-semibold" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+    }, "Actuation View"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => switchView("deadband"),
+      className: `px-2 py-0.5 rounded text-[9.5px] font-mono uppercase transition ${boardMode === "deadband" ? "bg-[var(--accent)] text-black font-semibold" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`
+    }, "Dead Band View")),
+    boardMode === "deadband" ? /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("span", { className: "flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("span", { className: "w-2 h-2 rounded-full bg-[#22c55e]" }), "Top Dead Band (Press)"),
+      /*#__PURE__*/React.createElement("span", { className: "flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("span", { className: "w-2 h-2 rounded-full bg-[#3b82f6]" }), "Bottom Dead Band (Release)")
+    ) : /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("span", { className: "flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("span", { className: "w-2 h-2 rounded-full bg-[#4ade80]" }), "Actuation (mm)"),
+      /*#__PURE__*/React.createElement("span", { className: "flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("span", { className: "w-2 h-2 rounded-full bg-[#38bdf8]" }), "RT Press"),
+      /*#__PURE__*/React.createElement("span", { className: "flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("span", { className: "w-2 h-2 rounded-full bg-[#fb923c]" }), "RT Release")
+    )),
+    /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => selectPreset(["KeyW", "KeyA", "KeyS", "KeyD"]),
+      className: "px-2 py-1 rounded border border-[var(--line)] bg-white/[0.03] hover:border-[var(--accent)]/50 text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--text-dim)] hover:text-[var(--text)] transition"
+    }, "WASD"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => selectPreset(allCodes),
+      className: "px-2 py-1 rounded border border-[var(--line)] bg-white/[0.03] hover:border-[var(--accent)]/50 text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--text-dim)] hover:text-[var(--text)] transition"
+    }, "Select All"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => selectPreset([]),
+      className: "px-2 py-1 rounded border border-[var(--line)] bg-white/[0.03] hover:border-[var(--accent)]/50 text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--text-dim)] hover:text-[var(--text)] transition"
+    }, "Uncheck"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: async () => {
+        if (!ctx.connected) return;
+        const allC = (KB.KB_ROWS || []).flat().map(k => k[2]);
+        const targets = ctx.selectedKeys && ctx.selectedKeys.size > 0 ? Array.from(ctx.selectedKeys) : allC;
+        const gMm = Number(window.__globalTravelMm) || 2.00;
+        await ctx.apiCall("set_trigger_codes", targets, gMm, 0, 0, 99);
+        if (ctx.refreshPerKeyActuation) await ctx.refreshPerKeyActuation();
+        ctx.setRtEnabled(false);
+        ctx.setActuation(gMm);
+      },
+      className: "px-2 py-1 rounded border border-rose-400/40 bg-rose-500/10 hover:bg-rose-500/20 text-[10px] font-mono uppercase tracking-[0.12em] text-rose-300 transition"
+    }, "Reset Travel"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => ctx.refreshPerKeyActuation && ctx.refreshPerKeyActuation(),
+      className: "px-2.5 py-1 rounded border border-[var(--accent)]/40 bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--accent)] transition"
+    }, "Sync Board"))), /*#__PURE__*/React.createElement("div", {
+      className: "w-full flex-1 flex items-center justify-center"
+    }, /*#__PURE__*/React.createElement(KeyboardPanel, {
+      mode: boardMode,
+      layer: ctx.layer || "default",
+      selectedKeys: ctx.selectedKeys,
+      setSelectedKeys: (updater) => {
+        ctx.setSelectedKeys(prev => {
+          const next = typeof updater === "function" ? updater(prev) : updater;
+          if (next && next.size === 1) {
+            const code = Array.from(next)[0];
+            const ov = ctx.perKeyActuation && ctx.perKeyActuation[code];
+            if (ov && typeof ov === "object") {
+              const uTop = ov.userDeadTop != null ? ov.userDeadTop : (ov.deadTop != null && ov.deadTop <= 1.0 ? ov.deadTop : 0.20);
+              const uBot = ov.userDeadBottom != null ? ov.userDeadBottom : (ov.deadBottom != null ? ov.deadBottom : 0.20);
+              if (ctx.setDeadTop) ctx.setDeadTop(Number(uTop));
+              if (ctx.setDeadBottom) ctx.setDeadBottom(Number(uBot));
+              if (ov.rtContinuous != null) {
+                window.__rtContinuous = !!ov.rtContinuous;
+                window.dispatchEvent(new CustomEvent("aether:rt-mode-change", { detail: { continuous: !!ov.rtContinuous } }));
+              }
+            }
+            if (ov && typeof ov === "object" && (ov.touchMode === 1 || ov.touchMode === 2)) {
+              ctx.setActuation(Number(ov.actuation) || 1.50);
+              ctx.setRtEnabled(ov.touchMode === 2);
+              if (ov.touchMode === 2) {
+                ctx.setRtPress(Number(ov.rtPress) || 0.05);
+                ctx.setRtRelease(Number(ov.rtRelease) || 0.05);
+              } else {
+                ctx.setRtPress(0.05);
+                ctx.setRtRelease(0.05);
+              }
+            } else {
+              const globalAct = (ov && typeof ov === "object" && ov.actuation) ? Number(ov.actuation) : 2.00;
+              ctx.setActuation(globalAct);
+              ctx.setRtEnabled(false);
+              ctx.setRtPress(0.05);
+              ctx.setRtRelease(0.05);
+            }
+          }
+          return next;
+        });
+      },
+      actuationPoint: ctx.actuation,
+      rtPress: ctx.rtPress,
+      rtRelease: ctx.rtRelease,
+      perKeyOverride: ctx.perKeyActuation,
+      liveDepths: ctx.liveDepths,
+      showPill: false,
+      compact: false
+    })));
+  };
+
   const ACTUATION_WIDGETS = [{
+    id: "board",
+    title: "Keyboard - Per-Key Actuation & RT",
+    default: { x: 40, y: 24, w: 980, h: 340 },
+    min: { w: 680, h: 280 },
+    render: ActuationBoardWidget
+  }, {
+
     id: "travel",
     title: "Travel",
     default: {
       x: 40,
-      y: 32,
+      y: 384,
       w: 680,
       h: 430
     },
@@ -43386,7 +43827,7 @@
     // keyboard.jsx today; other boards show the layout note instead.
     const emptySel = useMemo(() => new Set(), []);
     const noop = useRef(() => {}).current;
-    const canRender = (board === "aula-win60-he" || board === "aula-win68he-max") && typeof KeyboardPanel === "function";
+    const canRender = (board === "aula-win60-he" || board === "aula-win68he-max" || board === "aula-win68-he-max") && typeof KeyboardPanel === "function";
     return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
       className: "font-title",
       style: {
@@ -44889,8 +45330,8 @@
     const [calibrating, setCalibrating] = useState(false);
     const [calibratedKeys, setCalibratedKeys] = useState(() => new Set()); // codes confirmed calibrated by firmware
     const [lightNonce, setLightNonce] = useState(0); // bump to force-resend lighting (e.g. after calibration)
-    const [deadTop, setDeadTop] = useState(0.04);
-    const [deadBottom, setDeadBottom] = useState(0.05);
+    const [deadTop, setDeadTop] = useState(0.20);
+    const [deadBottom, setDeadBottom] = useState(0.20);
     const [switchId, setSwitchId] = useState("hm1");
     // Per-key actuation as the firmware actually stores it. Populated by reading
     // the device on connect and after every Apply so the board renders each key
@@ -45687,27 +46128,88 @@
       if (connected) refreshPerKeyActuation();
     }, [connected]);
     const applyActuation = async () => {
-      if (!connected) return;
       const codes = Array.from(selectedKeys);
       if (codes.length === 0) return;
-      const mode = rtEnabled ? (window.__rtContinuous ? 13 : 12) : 0;
-      await apiCall("set_trigger_codes", codes, actuation, rtEnabled ? rtPress : 0, rtEnabled ? rtRelease : 0, mode);
-      // Optimistic update so the board reflects the change instantly. Skip the
-      // 132-key read-back here — it takes ~5 s and we already know what was
-      // written; the next connect/manual refresh re-syncs from the firmware.
+      const isCont = !!window.__rtContinuous;
+      const mode = rtEnabled ? (isCont ? 13 : 12) : 0;
+      const effAct = Number(actuation.toFixed(2));
+
+      // Update UI keycaps IMMEDIATELY
       setPerKeyActuation(prev => {
-        const next = {
-          ...prev
-        };
-        for (const c of codes) next[c] = actuation;
+        const next = { ...prev };
+        for (const c of codes) {
+          const prevOv = (prev && prev[c] && typeof prev[c] === "object") ? prev[c] : {};
+          const keyUserTop = prevOv.userDeadTop != null
+            ? Number(prevOv.userDeadTop)
+            : (prevOv.deadTop != null && prevOv.deadTop <= 1.0 ? Number(prevOv.deadTop) : 0.20);
+          const keyUserBot = prevOv.userDeadBottom != null
+            ? Number(prevOv.userDeadBottom)
+            : (prevOv.deadBottom != null ? Number(prevOv.deadBottom) : 0.20);
+
+          const activeDeadTop = (mode === 12)
+            ? Number(Math.max(0.05, Math.min(3.39, effAct - 0.01)).toFixed(2))
+            : Number(keyUserTop.toFixed(2));
+          const activeDeadBot = Number(keyUserBot.toFixed(2));
+
+          const entry = {
+            ...prevOv,
+            actuation: effAct,
+            rtPress: rtEnabled ? Number(rtPress.toFixed(2)) : 0,
+            rtRelease: rtEnabled ? Number(rtRelease.toFixed(2)) : 0,
+            touchMode: rtEnabled ? 2 : 1,
+            rtContinuous: rtEnabled ? isCont : false,
+            deadTop: activeDeadTop,
+            deadBottom: activeDeadBot,
+            userDeadTop: Number(keyUserTop.toFixed(2)),
+            userDeadBottom: activeDeadBot
+          };
+          const shortC = String(c).replace(/^Key/, "").replace(/^Digit/, "");
+          const keyC = shortC.length === 1 && /[A-Za-z]/.test(shortC) ? "Key" + shortC.toUpperCase() : c;
+          for (const alias of [c, String(c).toUpperCase(), String(c).toLowerCase(), shortC, shortC.toUpperCase(), shortC.toLowerCase(), keyC]) {
+            next[alias] = entry;
+            if (window.__perKeyOverride) window.__perKeyOverride[alias] = entry;
+          }
+        }
         return next;
       });
+
+      if (connected) {
+        await apiCall("set_trigger_codes", codes, actuation, rtEnabled ? rtPress : 0, rtEnabled ? rtRelease : 0, mode);
+      }
     };
-    const applyDeadband = () => {
-      if (!connected) return;
+    const applyDeadband = async (overrideTop, overrideBot) => {
       const codes = Array.from(selectedKeys);
       if (codes.length === 0) return;
-      apiCall("set_deadband_codes", codes, deadTop, deadBottom);
+      const pVal = Number((overrideTop != null ? overrideTop : (deadTop ?? 0.20)).toFixed(2));
+      const rVal = Number((overrideBot != null ? overrideBot : (deadBottom ?? 0.20)).toFixed(2));
+
+      // Update UI keycaps IMMEDIATELY
+      setPerKeyActuation(prev => {
+        const next = { ...prev };
+        for (const c of codes) {
+          const prevOv = (prev && prev[c] && typeof prev[c] === "object") ? prev[c] : {};
+          const isBasicLocked = (prevOv.touchMode === 2 && !prevOv.rtContinuous);
+          const newUserTop = isBasicLocked ? (prevOv.userDeadTop ?? pVal) : pVal;
+          const entry = {
+            ...prevOv,
+            deadTop: isBasicLocked ? (prevOv.deadTop ?? pVal) : pVal,
+            deadBottom: rVal,
+            userDeadTop: newUserTop,
+            userDeadBottom: rVal
+          };
+          const shortC = String(c).replace(/^Key/, "").replace(/^Digit/, "");
+          const keyC = shortC.length === 1 && /[A-Za-z]/.test(shortC) ? "Key" + shortC.toUpperCase() : c;
+          for (const alias of [c, String(c).toUpperCase(), String(c).toLowerCase(), shortC, shortC.toUpperCase(), shortC.toLowerCase(), keyC]) {
+            next[alias] = entry;
+            if (window.__perKeyOverride) window.__perKeyOverride[alias] = entry;
+          }
+        }
+        return next;
+      });
+
+      if (connected) {
+        await apiCall("set_deadband_codes", codes, pVal, rVal);
+      }
     };
 
     // Travel Test: stream live analog depth for ALL keys (so any keypress shows,
@@ -46129,3 +46631,4 @@
 </script>
 </body>
 </html>
+

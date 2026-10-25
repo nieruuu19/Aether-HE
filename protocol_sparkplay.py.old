@@ -1,0 +1,1021 @@
+"""protocol_sparkplay.py — Aula WIN 68 HE MAX (VID 1CA2 / PID 1901) driver for Aether-HE.
+
+Packet layout mirrors the official WebHID driver (magnet.aulastar.com,
+index-C7aUVaaC.js, protocol 1.0.9):
+
+    byte 0    0x5C host->keyboard   (replies start with 0xDC)
+    byte 1    payload length N
+    byte 2    command
+    byte 3    checksum = (53 + b0 + b1 + b2 + b[N+3]) & 0xFF   (b[N+3] = last payload byte)
+    byte 4..  payload
+
+Commands: 0x00 system (poll rate / calibration), 0x01 sync, 0x12 live travel
+matrix, 0x18 main lighting, 0x23 per-key layout (actuation / RT / dead zones /
+remap / switch), 0x24 mod-tap, 0x25 toggle, 0x2A per-key RGB, 0x2C SOCD,
+0x2D rappy snappy.
+"""
+
+import logging
+import threading
+import time
+
+log = logging.getLogger("aether.sparkplay")
+
+# --------------------------------------------------------------------------- constants
+REPORT_ID = 0x00
+FRAME_LEN = 64
+HEAD = 0x5C
+REPLY_HEAD = 0xDC
+MAGIC = HEAD
+
+CMD_SYS = 0x00
+CMD_SYNC = 0x01
+CMD_RM6X21 = 0x12
+CMD_PRGB = 0x18
+CMD_LOGORGB = 0x19
+CMD_KEY = 0x23
+CMD_MT = 0x24
+CMD_TGL = 0x25
+CMD_DB = 0x29
+CMD_KRGB = 0x2A
+CMD_DEFKEY = 0x2B
+CMD_SOCD = 0x2C
+CMD_RS = 0x2D
+
+# legacy names (other modules / old patches may import these)
+CMD_TRAVEL_MATRIX = CMD_RM6X21
+CMD_LIGHTING = CMD_PRGB
+CMD_AMBIENT = CMD_LOGORGB
+CMD_KEY_CONFIG = CMD_KEY
+CMD_GLOBAL_TRAVEL = CMD_DB
+CMD_PER_KEY_RGB = CMD_KRGB
+CMD_HID_MATRIX = CMD_DEFKEY
+
+ORDER_START_ADJUSTING = 12
+ORDER_SAVE_ADJUSTING = 13
+ORDER_RATE = 0x50
+
+RM_TRAVEL = 2        # RM6X21 sub-type: live travel (um)
+RM_PRESS_STATE = 3   # RM6X21 sub-type: actuation state per key
+
+# CMD 0x23 layout property ids (oe.KeyLayout)
+PROP_FN0 = 0
+PROP_DB0 = 4          # actuation / RT first-trigger travel (um)
+PROP_MODE = 8         # (KeyTouchMode << 4) | AdvanceKeyType
+PROP_MT_DELAY = 19
+PROP_RTP = 20         # RT press sensitivity (um)
+PROP_RTR = 21         # RT release sensitivity (um)
+PROP_DP = 22          # per-key top/press dead zone (um)  == RT reset point
+PROP_DR = 23          # per-key bottom/release dead zone (um)
+PROP_KR = 24          # single-key release travel (um)
+PROP_AXIS = 25        # switch id
+ALL_PROPS = (PROP_FN0, PROP_DB0, PROP_MODE, PROP_RTP, PROP_RTR, PROP_DP, PROP_DR, PROP_KR, PROP_AXIS)
+PROP_NAMES = {0: "Fn0 keycode", 4: "DB0 actuation", 8: "Mode", 19: "MT delay", 20: "RT press",
+              21: "RT release", 22: "DP top dz", 23: "DR bottom dz", 24: "KR release", 25: "AXIS switch"}
+
+# legacy property names
+PROP_REMAP_L0 = PROP_FN0
+PROP_ACTUATION_UM = PROP_DB0
+PROP_MODE_FLAGS = PROP_MODE
+PROP_RT_PRESS_UM = PROP_RTP
+PROP_RT_RELEASE_UM = PROP_RTR
+PROP_DZ_TOP_UM = PROP_DP
+PROP_DZ_BOT_UM = PROP_DR
+
+TOUCH_GLOBAL, TOUCH_SINGLE, TOUCH_QUICK = 0, 1, 2
+ADV_NONE, ADV_DKS, ADV_MPT, ADV_MT, ADV_TGL, ADV_END, ADV_MACRO, ADV_SOCD, ADV_RS = 0, 1, 2, 3, 4, 5, 6, 8, 9
+
+# Aether trigger modes (sent by the UI)
+AETHER_FIXED = 0
+AETHER_RT_BASIC = 12
+AETHER_RT_CONTINUOUS = 13
+
+# Firmware RT (QuickMode) is natively "continuous". Basic RT is emulated:
+#   "dp"   -> raise per-key top dead zone (RT reset point) to just under the actuation point
+#   "kr"   -> write Layout_KR (release travel) = actuation point
+#   "none" -> basic behaves like continuous
+BASIC_RT_STRATEGY = "dp"
+BASIC_RT_RESET_MARGIN_MM = 0.05
+
+LIGHT_MODE_CUSTOM = 0x15       # 21 = per-key custom colours
+LIGHT_RAINBOW_ID = 7
+STREAM_MIN_INTERVAL_S = 0.05   # ~20 fps host effects
+TRAVEL_NOISE_MM = 0.02
+CALIB_DONE_MM = 1.0
+
+MATRIX_KEYS = 126  # 6 rows x 21 cols
+
+# --------------------------------------------------------------------------- key table
+# (matrix index sp_idx, aula key_id (= HID usage), web code, short name)
+AULA_WIN68_KEYS = [
+    (21, 41, "Escape", "Esc"), (22, 30, "Digit1", "1"), (23, 31, "Digit2", "2"),
+    (24, 32, "Digit3", "3"), (25, 33, "Digit4", "4"), (26, 34, "Digit5", "5"),
+    (27, 35, "Digit6", "6"), (28, 36, "Digit7", "7"), (29, 37, "Digit8", "8"),
+    (30, 38, "Digit9", "9"), (31, 39, "Digit0", "0"), (32, 45, "Minus", "-"),
+    (33, 46, "Equal", "="), (34, 42, "Backspace", "Backspace"), (35, 73, "Insert", "Ins"),
+    (42, 43, "Tab", "Tab"), (43, 20, "KeyQ", "Q"), (44, 26, "KeyW", "W"),
+    (45, 8, "KeyE", "E"), (46, 21, "KeyR", "R"), (47, 23, "KeyT", "T"),
+    (48, 28, "KeyY", "Y"), (49, 24, "KeyU", "U"), (50, 12, "KeyI", "I"),
+    (51, 18, "KeyO", "O"), (52, 19, "KeyP", "P"), (53, 47, "BracketLeft", "["),
+    (54, 48, "BracketRight", "]"), (55, 49, "Backslash", "\\"), (56, 76, "Delete", "Del"),
+    (63, 57, "CapsLock", "Caps"), (64, 4, "KeyA", "A"), (65, 22, "KeyS", "S"),
+    (66, 7, "KeyD", "D"), (67, 9, "KeyF", "F"), (68, 10, "KeyG", "G"),
+    (69, 11, "KeyH", "H"), (70, 13, "KeyJ", "J"), (71, 14, "KeyK", "K"),
+    (72, 15, "KeyL", "L"), (73, 51, "Semicolon", ";"), (74, 52, "Quote", "'"),
+    (76, 40, "Enter", "Enter"), (77, 75, "PageUp", "PgUp"),
+    (84, 225, "ShiftLeft", "LShift"), (86, 29, "KeyZ", "Z"), (87, 27, "KeyX", "X"),
+    (88, 6, "KeyC", "C"), (89, 25, "KeyV", "V"), (90, 5, "KeyB", "B"),
+    (91, 17, "KeyN", "N"), (92, 16, "KeyM", "M"), (93, 54, "Comma", ","),
+    (94, 55, "Period", "."), (95, 56, "Slash", "/"), (96, 229, "ShiftRight", "RShift"),
+    (97, 82, "ArrowUp", "Up"), (98, 78, "PageDown", "PgDn"),
+    (105, 224, "ControlLeft", "LCtrl"), (106, 227, "MetaLeft", "LWin"),
+    (107, 226, "AltLeft", "LAlt"), (111, 44, "Space", "Space"),
+    (114, 230, "AltRight", "RAlt"), (115, 1, "KeyFn", "Fn"),
+    (116, 228, "ControlRight", "RCtrl"), (117, 80, "ArrowLeft", "Left"),
+    (118, 81, "ArrowDown", "Down"), (119, 79, "ArrowRight", "Right"),
+]
+ALL_KEY_IDS = [k for _, k, _, _ in AULA_WIN68_KEYS]
+CANON_IDXS = [i for i, _, _, _ in AULA_WIN68_KEYS]
+SP_IDX_TO_KEY_ID = {i: k for i, k, _, _ in AULA_WIN68_KEYS}
+KEY_ID_TO_SP_IDX = {k: i for i, k, _, _ in AULA_WIN68_KEYS}
+
+AULA_WIN68_ALIASES = {}
+for _i, _k, _code, _short in AULA_WIN68_KEYS:
+    AULA_WIN68_ALIASES[_i] = (_code, _short, _short.upper(), _short.lower(), str(_i), str(_k))
+
+_EXTRA_ALIASES = {
+    21: ("ESC",), 34: ("Bksp", "Back", "BSPC", "BS"),
+    35: ("INS", "Insert", "Backquote", "`"), 53: ("Lbr", "{["), 54: ("Rbr", "}]"),
+    55: ("Bsl", "\\|"), 56: ("DEL", "Delete"), 63: ("CAPS", "CapsLock", "Caps Lock"),
+    73: ("Semi", ";:"), 74: ("Quot", "'\""), 76: ("Return", "ENT"), 77: ("PGUP", "PageUp"),
+    84: ("Shift", "LSFT", "LSHIFT"), 94: ("Dot", ".>"), 96: ("RSFT", "RSHIFT"),
+    97: ("UP", "UpArrow", "\u2191"), 98: ("PGDN", "PageDown", "End", "END"),
+    105: ("Ctrl", "LCTL", "LCTRL"), 106: ("Win", "GUI", "LGUI", "Super"), 107: ("Alt", "LALT"),
+    111: ("Spacebar", "SPC", "SPACE", " "), 114: ("RALT",), 115: ("FN", "Function"),
+    116: ("RCTL", "RCTRL"), 117: ("LEFT", "LeftArrow", "\u2190"),
+    118: ("DOWN", "DownArrow", "\u2193"), 119: ("RIGHT", "RightArrow", "\u2192"),
+}
+for _i, _extra in _EXTRA_ALIASES.items():
+    AULA_WIN68_ALIASES[_i] = AULA_WIN68_ALIASES.get(_i, ()) + _extra
+
+# sensor slots that physically belong to another key (stabilised / wide keys)
+_MIRROR_SLOTS = {75: 76, 85: 86, 108: 111, 109: 111, 110: 111, 112: 114, 113: 115}
+for _alt, _canon in _MIRROR_SLOTS.items():
+    AULA_WIN68_ALIASES[_alt] = AULA_WIN68_ALIASES[_canon]
+    SP_IDX_TO_KEY_ID[_alt] = SP_IDX_TO_KEY_ID[_canon]
+
+AULA_WIN68_MATRIX = {i: (a[0], a[1]) for i, a in AULA_WIN68_ALIASES.items()}
+DEFAULT_SLOT_HIDS = dict(SP_IDX_TO_KEY_ID)
+
+
+def _canon(idx):
+    idx = int(idx)
+    return _MIRROR_SLOTS.get(idx, idx)
+
+
+def ensure_keymap_populated(km):
+    """Point Aether's KeyMap at the real 6x21 sensor slots of the WIN 68 HE MAX."""
+    if km is None:
+        return km
+    for attr in ("by_index", "by_name", "by_code", "index_of_code"):
+        if getattr(km, attr, None) is None:
+            setattr(km, attr, {})
+    if getattr(km, "layer_indices", None) is None:
+        km.layer_indices = set()
+
+    loaded = list(km.by_index.values()) + list(km.by_code.values()) + list(km.by_name.values())
+    token_to_loaded = {}
+    for e in loaded:
+        if isinstance(e, dict):
+            for fld in ("code", "name", "label"):
+                if e.get(fld):
+                    token_to_loaded[str(e[fld]).lower()] = e
+
+    km.by_index.clear(); km.by_name.clear(); km.by_code.clear(); km.index_of_code.clear()
+
+    for sp_idx in range(MATRIX_KEYS):
+        r, c = divmod(sp_idx, 21)
+        aliases = AULA_WIN68_ALIASES.get(sp_idx, (f"KeyR{r}C{c}", f"{r},{c}"))
+        base = next((token_to_loaded[a.lower()] for a in aliases if a.lower() in token_to_loaded), None)
+        entry = dict(base) if isinstance(base, dict) else {}
+        entry["name"] = entry.get("name") or (aliases[1] if len(aliases) > 1 else aliases[0])
+        entry["code"] = entry.get("code") or aliases[0]
+        entry.update(matrix=sp_idx, index=sp_idx, hid=SP_IDX_TO_KEY_ID.get(sp_idx, 0), row=r, col=c)
+        entry["x"] = float(entry.get("x", c)); entry["y"] = float(entry.get("y", max(0, r - 1)))
+        entry["w"] = float(entry.get("w", 1.0)); entry["h"] = float(entry.get("h", 1.0))
+        km.by_index[sp_idx] = entry
+        tokens = list(aliases) + [str(entry["code"]), str(entry["name"])]
+        for a in tokens:
+            for v in (a, a.upper(), a.lower()):
+                km.by_name[v] = entry
+                km.by_code[v] = entry
+                if sp_idx not in _MIRROR_SLOTS or v not in km.index_of_code:
+                    km.index_of_code[v] = sp_idx
+
+    def _indices():
+        return list(CANON_IDXS)
+
+    def _indices_for_codes(codes):
+        if not codes:
+            return _indices()
+        out = []
+        for code in codes:
+            s = str(code).strip()
+            hit = None
+            for sp_idx in CANON_IDXS:
+                if any(s.lower() == a.lower() for a in AULA_WIN68_ALIASES.get(sp_idx, ())):
+                    hit = sp_idx
+                    break
+            if hit is None:
+                for v in (s, s.upper(), s.lower()):
+                    if v in km.index_of_code:
+                        hit = _canon(km.index_of_code[v])
+                        break
+            if hit is not None and hit not in out:
+                out.append(hit)
+        return out  # NOTE: no more "unknown code -> whole board" fallback
+
+    def _code_of(idx):
+        e = km.by_index.get(int(idx))
+        if isinstance(e, dict) and e.get("code"):
+            return e["code"]
+        a = AULA_WIN68_ALIASES.get(int(idx))
+        return a[0] if a else str(idx)
+
+    def _hid_for_code(code):
+        for v in (str(code), str(code).upper(), str(code).lower()):
+            if v in km.index_of_code:
+                return SP_IDX_TO_KEY_ID.get(km.index_of_code[v], 0)
+        return 0
+
+    km.indices = _indices
+    km.indices_for_codes = _indices_for_codes
+    km.code_of = _code_of
+    km.hid_for_code = _hid_for_code
+    return km
+
+
+# --------------------------------------------------------------------------- packet builders
+def aula_checksum(pkt):
+    """ve.ComputeCheckSum"""
+    n = pkt[1] & 0xFF
+    s = 53 + (pkt[0] & 0xFF) + n + (pkt[2] & 0xFF)
+    if 0 < n <= 252 and n + 3 < len(pkt):
+        s += pkt[n + 3] & 0xFF
+    return s & 0xFF
+
+
+_aula_compute_checksum = aula_checksum
+
+
+def pack_frame(cmd, payload, fill=0x00):
+    payload = [int(b) & 0xFF for b in payload][:60]
+    pkt = [fill & 0xFF] * FRAME_LEN
+    pkt[0], pkt[1], pkt[2] = HEAD, len(payload), cmd & 0xFF
+    pkt[4:4 + len(payload)] = payload
+    pkt[3] = aula_checksum(pkt)
+    return [REPORT_ID] + pkt
+
+
+_pack_aula_frame = pack_frame
+
+
+def _u16(v):
+    v = int(v) & 0xFFFF
+    return [v & 0xFF, v >> 8]
+
+
+def _um(mm):
+    return max(0, int(round(float(mm) * 1000)))
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def sync_frame():
+    return pack_frame(CMD_SYNC, [1, 2, 3, 4, 0xFF, 0xFF])
+
+
+def cmd_frame(order, param=None):
+    body = [order] + ([param] if param is not None else []) + [0xFF, 0xFF]
+    return pack_frame(CMD_SYS, body)
+
+
+def rm6x21_frame(sub, half):
+    return pack_frame(CMD_RM6X21, [sub, half, 0xFF, 0xFF])
+
+
+_rm6x21_frame = rm6x21_frame
+
+
+def layout_frames(records, rw=1):
+    """oe.LayoutDataPack — records: (key_id, prop, value16), 14 per packet."""
+    frames = []
+    for i in range(0, len(records), 14):
+        payload = [rw]
+        for key_id, prop, value in records[i:i + 14]:
+            payload += [key_id & 0xFF, prop & 0xFF] + _u16(value)
+        frames.append(pack_frame(CMD_KEY, payload))
+    return frames
+
+
+def build_cmd23_write(records):
+    """Legacy helper: records are (key_id, prop, lo, hi)."""
+    return layout_frames([(k, p, (lo & 0xFF) | ((hi & 0xFF) << 8)) for k, p, lo, hi in records])
+
+
+def krgb_frames(entries):
+    """oe.KRGBPack — entries: (key_id, r, g, b), 14 per packet, unused bytes 0xFF."""
+    frames = []
+    for i in range(0, len(entries), 14):
+        payload = [1]
+        for k, r, g, b in entries[i:i + 14]:
+            payload += [k, r, g, b]
+        frames.append(pack_frame(CMD_KRGB, payload, fill=0xFF))
+    return frames
+
+
+def socd_frame(pos1, pos2, kv1, kv2, mode, typ=0, delay_ms=0):
+    return pack_frame(CMD_SOCD, [1, pos1, pos2] + _u16(kv1) + _u16(kv2) + [mode, typ] + _u16(delay_ms))
+
+
+def mt_frame(key_id, hold, tap, delay10):
+    return pack_frame(CMD_MT, [1, key_id] + _u16(hold) + _u16(tap) + [delay10])
+
+
+def tgl_frame(key_id, keycode, delay10):
+    return pack_frame(CMD_TGL, [1, key_id] + _u16(keycode) + [delay10])
+
+
+def rs_frame(k1, k2):
+    return pack_frame(CMD_RS, [1, k1, k2])
+
+
+# --------------------------------------------------------------------------- transport
+def _raw(dev):
+    return getattr(dev, "_dev", None) or getattr(dev, "dev", None)
+
+
+def _norm(r):
+    r = list(r or [])
+    if len(r) == 65 and r[0] == 0x00 and r[1] == REPLY_HEAD:
+        r = r[1:]
+    return r
+
+
+def _is_reply(r, cmd):
+    # firmware echoes the plain cmd (dc 05 2a ...); the web SDK also accepts cmd|0x80
+    return len(r) >= 3 and r[0] == REPLY_HEAD and (r[2] & 0x7F) == (cmd & 0x7F)
+
+
+def transact(dev, lock, frame, timeout=0.05, n_reports=1, drain=True):
+    """Write one frame and collect its reply (n_reports x 64 bytes). Returns list or None."""
+    with lock:
+        raw = _raw(dev)
+        if raw is None:
+            return None
+        if drain:
+            for _ in range(32):
+                try:
+                    if not raw.read(65):
+                        break
+                except Exception:
+                    break
+        raw.write(bytes(frame))
+        cmd = frame[3]
+        buf, got = [], 0
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline and got < n_reports:
+            try:
+                r = raw.read(65)
+            except Exception:
+                break
+            if not r:
+                time.sleep(0.0005)
+                continue
+            r = _norm(r)
+            if not buf and not _is_reply(r, cmd):
+                continue
+            buf.extend(r[:64])
+            got += 1
+        return buf or None
+
+
+def _parse_matrix_u16(buf, sub):
+    if not buf or len(buf) < 8:
+        return None
+    if buf[4] != sub and buf[5] != sub:
+        return None
+    n = min(63, (len(buf) - 6) // 2)
+    vals = [buf[6 + 2 * i] | (buf[7 + 2 * i] << 8) for i in range(n)]
+    return vals + [0] * (63 - n)
+
+
+def query_half_matrix(dev, lock, half, timeout_s=0.06):
+    """Live travel for one half (rows 0-2 or 3-5). Returns 63 floats in mm, or None."""
+    vals = _parse_matrix_u16(transact(dev, lock, rm6x21_frame(RM_TRAVEL, half), timeout_s, n_reports=3), RM_TRAVEL)
+    if vals is None:
+        return None
+    return [(v / 1000.0) if v <= 5000 else 0.0 for v in vals]
+
+
+def query_press_states(dev, lock, timeout_s=0.06):
+    """Firmware actuation state for all 126 matrix slots (non-zero = actuated), or None."""
+    buf = transact(dev, lock, rm6x21_frame(RM_PRESS_STATE, 1), timeout_s, n_reports=3)
+    if not buf or len(buf) < 8 or (buf[4] != RM_PRESS_STATE and buf[5] != RM_PRESS_STATE):
+        return None
+    st = list(buf[6:6 + MATRIX_KEYS])
+    return st + [0] * (MATRIX_KEYS - len(st))
+
+
+# --------------------------------------------------------------------------- live readers
+class SparkPlayLiveReader:
+    """Polls CMD 0x12 travel and publishes depth (mm) per matrix index and per key code."""
+
+    def __init__(self, dev, lock, km, idxs=None):
+        self.dev, self.lock = dev, lock
+        self.km = ensure_keymap_populated(km)
+        self.idxs = set(int(i) for i in idxs) if idxs else None
+        if self.idxs:
+            halves = sorted({1 if _canon(i) < 63 else 2 for i in self.idxs}
+                            | {1 if a < 63 else 2 for a, c in _MIRROR_SLOTS.items() if c in self.idxs})
+            self._halves = halves or [1, 2]
+        else:
+            self._halves = [1, 2]
+        self._names = {}
+        for sp_idx in CANON_IDXS:
+            names = set()
+            for a in AULA_WIN68_ALIASES.get(sp_idx, ()):
+                names |= {a, a.upper(), a.lower()}
+            e = self.km.by_index.get(sp_idx) if self.km else None
+            if isinstance(e, dict):
+                for k in ("code", "name", "label"):
+                    if e.get(k):
+                        names.add(str(e[k]))
+            self._names[sp_idx] = tuple(names)
+        self._stop = threading.Event()
+        self._thread = None
+        self._snap_lock = threading.Lock()
+        self._by_code, self._by_idx = {}, {}
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="sparkplay-reader", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.4)
+        self._thread = None
+
+    def _publish(self, full):
+        by_idx = {i: (v if v > TRAVEL_NOISE_MM else 0.0) for i, v in enumerate(full)}
+        for alt, canon in _MIRROR_SLOTS.items():
+            by_idx[canon] = max(by_idx.get(canon, 0.0), by_idx.get(alt, 0.0))
+        by_code = {}
+        for sp_idx, names in self._names.items():
+            v = by_idx.get(sp_idx, 0.0)
+            for n in names:
+                by_code[n] = v
+        with self._snap_lock:
+            self._by_idx, self._by_code = by_idx, by_code
+
+    def _loop(self):
+        last = {1: [0.0] * 63, 2: [0.0] * 63}
+        fails = 0
+        while not self._stop.is_set():
+            try:
+                if not self.dev.is_open():
+                    self.dev.open()
+                for h in self._halves:
+                    v = query_half_matrix(self.dev, self.lock, h)
+                    if v is None:
+                        fails += 1
+                    else:
+                        last[h], fails = v, 0
+                self._publish(last[1] + last[2])
+                if fails == 20:
+                    log.warning("travel matrix: no replies (is the Aula web driver open in Chrome?)")
+            except Exception as e:
+                log.debug("live reader error: %s", e)
+                time.sleep(0.05)
+            time.sleep(0.004 if fails < 20 else 0.1)
+
+    def snapshot(self):
+        with self._snap_lock:
+            return dict(self._by_code)
+
+    def snapshot_by_index(self):
+        with self._snap_lock:
+            return dict(self._by_idx)
+
+
+class SparkPlayCalibrationReader:
+    """Marks a key 'calibrated' once it has been pressed deep (or the firmware reports it actuated)."""
+
+    def __init__(self, dev, lock, km, threshold_mm=CALIB_DONE_MM):
+        self.dev, self.lock, self.km = dev, lock, km
+        self.threshold = float(threshold_mm)
+        self.done = False
+        self._seen = set()
+        self._codes = {i: (km.code_of(i) if km and hasattr(km, "code_of") else AULA_WIN68_ALIASES[i][0])
+                       for i in CANON_IDXS}
+        self._stop = threading.Event()
+        self._thread = None
+        self._lk = threading.Lock()
+
+    def start(self):
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="sparkplay-calib", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.4)
+        self._thread = None
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                h1 = query_half_matrix(self.dev, self.lock, 1) or [0.0] * 63
+                h2 = query_half_matrix(self.dev, self.lock, 2) or [0.0] * 63
+                full = h1 + h2
+                states = query_press_states(self.dev, self.lock) or [0] * MATRIX_KEYS
+                hit = set()
+                for i in range(MATRIX_KEYS):
+                    if full[i] >= self.threshold or states[i]:
+                        c = _canon(i)
+                        if c in self._codes:
+                            hit.add(c)
+                with self._lk:
+                    self._seen |= hit
+                    self.done = len(self._seen) >= len(self._codes)
+            except Exception as e:
+                log.debug("calib reader: %s", e)
+                time.sleep(0.05)
+            time.sleep(0.01)
+
+    def snapshot(self):
+        with self._lk:
+            return [self._codes[i] for i in sorted(self._seen)]
+
+
+# --------------------------------------------------------------------------- driver
+class _KeyState:
+    __slots__ = ("touch", "adv", "act", "rtp", "rtr", "rt_kind", "dz_top", "dz_bot", "dp_dev", "kr_dev", "kr_base")
+
+    def __init__(self):
+        self.touch, self.adv = TOUCH_SINGLE, ADV_NONE
+        self.act, self.rtp, self.rtr = 1.5, 0.2, 0.2
+        self.rt_kind = None
+        self.dz_top, self.dz_bot = 0.1, 0.1
+        self.dp_dev = self.kr_dev = self.kr_base = None
+
+    def mode_value(self):
+        return ((self.touch & 0x0F) << 4) | (self.adv & 0x0F)
+
+
+def _lvl(v, default=4):
+    """0..4 hardware level; accepts 0..100 UI values too."""
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return default
+    if v > 4:
+        v = int(round(v / 25.0))
+    return _clamp(v, 0, 4)
+
+
+class SparkPlayDriver:
+    name = "SparkPlayJoy v1.0.9"
+    DEADBAND_SCOPE = "per-key"
+    MACRO_SLOTS = 8
+    MACRO_MAX_EVENTS = 64
+    MACRO_MAX_DELAY_MS = 5000
+    MACRO_MAX_REPEAT = 255
+    MACRO_PLAY_MODES = (0, 1, 2)
+
+    DEFAULT_PALETTE = [(255, 0, 0), (255, 127, 0), (255, 255, 0), (0, 255, 0),
+                       (0, 255, 255), (0, 0, 255), (127, 0, 255)]
+    AULA_PRESET_RGB = DEFAULT_PALETTE
+    # Static colour: True = custom mode 0x15 + paint all keys (proven path);
+    # False = official mode 0 with the colour in palette slot 0 (one packet, no per-key writes)
+    STATIC_VIA_PERKEY = False
+    SLEEP_CODE = 2
+
+    def __init__(self, board, dev, lock):
+        self.board, self.dev, self.lock = board, dev, lock
+        self._keys = {k: _KeyState() for k in ALL_KEY_IDS}
+        self._synced = False
+        self._palette = list(self.DEFAULT_PALETTE)
+        self._custom = False
+        self._bright = 4
+        self._key_rgb = {}        # desired per-key colours (persistent)
+        self._key_rgb_sent = {}   # last colours actually sent
+        self._last_stream_ts = 0.0
+        self.super_response = False
+        self._remap_cache = {}
+        self._macros, self._macro_bindings = {}, {}
+        self._ack_misses = 0
+
+    # ---- helpers
+    def supports(self, feature: str) -> bool:
+        return feature not in ("macros",)   # macros are not implemented on-device yet
+
+    def _ks(self, key_id):
+        st = self._keys.get(key_id)
+        if st is None:
+            st = self._keys[key_id] = _KeyState()
+        return st
+
+    def _kid(self, idx):
+        return SP_IDX_TO_KEY_ID.get(_canon(idx))
+
+    def _key_ids(self, idxs):
+        out, seen = [], set()
+        for i in (idxs if idxs else CANON_IDXS):
+            k = self._kid(i)
+            if k and k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
+    def _write_frames(self, frames: list[list[int]], delay_s: float = 0.004):
+        # Board replies: 5c <len> <cmd|0x80> <chk> ...  (header is 0x5C, not 0xDC)
+        with self.lock:
+            if not self.dev.is_open():
+                self.dev.open()
+            raw_dev = getattr(self.dev, "_dev", None) or getattr(self.dev, "dev", None)
+            if raw_dev is None:
+                return
+            self._ack_misses = getattr(self, "_ack_misses", 0)
+            for f in frames:
+                want = ((f[3] | 0x80) & 0xFF) if len(f) > 3 else None
+                got_ack = False
+                for attempt in range(2):
+                    try:
+                        for _ in range(16):
+                            if not raw_dev.read(65):
+                                break
+                    except Exception:
+                        pass
+                    raw_dev.write(bytes(f))
+                    deadline = time.perf_counter() + 0.05
+                    while time.perf_counter() < deadline:
+                        r = raw_dev.read(65)
+                        if r and len(r) > 2 and r[0] in (0x5C, 0xDC) and (want is None or r[2] == want):
+                            got_ack = True
+                            break
+                        if not r:
+                            time.sleep(0.0005)
+                    if got_ack:
+                        break
+                if not got_ack:
+                    self._ack_misses += 1
+                if delay_s > 0:
+                    time.sleep(min(delay_s, 0.003))
+
+    def connect(self):
+        info = self.dev.open()
+        self._write_frames([sync_frame()], retries=0)
+        if not self._synced:
+            try:
+                self._sync_from_device()
+            except Exception as e:
+                log.warning("sparkplay sync failed: %s", e)
+        return info or {"interface_number": 2}
+
+    def make_live_reader(self, km, idxs=None):
+        ensure_keymap_populated(km)
+        if not self.dev.is_open():
+            try:
+                self.dev.open()
+            except Exception:
+                pass
+        return SparkPlayLiveReader(self.dev, self.lock, km, idxs)
+
+    def make_calibration_reader(self, km):
+        return SparkPlayCalibrationReader(self.dev, self.lock, km)
+
+    def open_trigger_test(self, idxs=None):
+        if not self.dev.is_open():
+            self.dev.open()
+        return True
+
+    def close_trigger_test(self):
+        return True
+
+    # ---- actuation / RT / dead zones
+    def set_actuation(self, idxs, mode, travel_mm, rt_press_mm=None, rt_release_mm=None):
+        """mode 0 = fixed actuation, 12 = Basic RT, 13 = Continuous RT."""
+        mode = int(mode)
+        rt_on = mode in (AETHER_RT_BASIC, AETHER_RT_CONTINUOUS)
+        travel = _clamp(float(travel_mm), 0.1, 3.4)
+        records = []
+        for k in self._key_ids(idxs):
+            st = self._ks(k)
+            st.act = travel
+            st.touch = TOUCH_QUICK if rt_on else TOUCH_SINGLE
+            st.rt_kind = ("basic" if mode == AETHER_RT_BASIC else "continuous") if rt_on else None
+            records.append((k, PROP_MODE, st.mode_value()))
+            records.append((k, PROP_DB0, _um(travel)))   # actuation / first-trigger point
+            if rt_on:
+                st.rtp = _clamp(float(rt_press_mm if rt_press_mm else 0.2), 0.01, 3.4)
+                st.rtr = _clamp(float(rt_release_mm if rt_release_mm else 0.2), 0.01, 3.4)
+                records.append((k, PROP_RTP, _um(st.rtp)))
+                records.append((k, PROP_RTR, _um(st.rtr)))
+            records += self._reset_point_records(k, st)
+        if records:
+            self._write_frames(layout_frames(records))
+        return True
+
+    def read_actuation(self, km):
+        ensure_keymap_populated(km)
+        out = {}
+        for sp_idx, k, _, _ in AULA_WIN68_KEYS:
+            val = self._ks(k).act
+            names = list(AULA_WIN68_ALIASES.get(sp_idx, ()))
+            e = km.by_index.get(sp_idx) if km else None
+            if isinstance(e, dict):
+                names += [str(e.get("name") or ""), str(e.get("code") or "")]
+            for a in names:
+                if a:
+                    out[a] = out[a.upper()] = out[a.lower()] = val
+        return out
+
+    def set_deadband(self, per_key_map, top_mm=0.1, bottom_mm=0.1):
+        """per_key_map: {idx: (top, bottom)} in 0.01 mm units (from app_web)."""
+        if isinstance(per_key_map, dict) and per_key_map:
+            items = per_key_map.items()
+        else:
+            items = [(i, (_um(top_mm) // 10, _um(bottom_mm) // 10)) for i in CANON_IDXS]
+        records, seen = [], set()
+        for idx, pair in items:
+            k = self._kid(idx)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            st = self._ks(k)
+            st.dz_top = _clamp(int(pair[0]) / 100.0, 0.0, 1.0)
+            st.dz_bot = _clamp(int(pair[1]) / 100.0, 0.0, 1.0)
+            records += self._reset_point_records(k, st, force=True)
+            records.append((k, PROP_DR, _um(st.dz_bot)))
+        if records:
+            self._write_frames(layout_frames(records))
+        return True
+
+    def set_switch(self, table):
+        records, seen = [], set()
+        for idx, sw in (table or {}).items():
+            k = self._kid(idx)
+            if k and k not in seen:
+                seen.add(k)
+                records.append((k, PROP_AXIS, int(sw) & 0xFF))
+        if records:
+            self._write_frames(layout_frames(records))
+        return True
+
+    def set_poll_rate(self, code):
+        # Aether codes 1/2/4/8 = 8k/4k/2k/1k Hz ; Aula: 0=8k 1=4k 2=2k 3=1k 4=500 5=250 6=125
+        code_map = {1: 0, 2: 1, 4: 2, 8: 3, 8000: 0, 4000: 1, 2000: 2, 1000: 3, 500: 4, 250: 5, 125: 6}
+        self._write_frames([cmd_frame(ORDER_RATE, code_map.get(int(code), 3))])
+        return True
+
+    def set_calibration(self, start, any_key=False):
+        self._write_frames([cmd_frame(ORDER_START_ADJUSTING if start else ORDER_SAVE_ADJUSTING)])
+        return True
+
+    # ---- lighting
+    def _send_prgb(self, mode, brightness, speed, direction=0, power=True, color_id=0):
+        payload = [1, 0, 0, 0, 0]
+        for r, g, b in (self._palette + self.DEFAULT_PALETTE)[:7]:
+            payload += [b & 0xFF, g & 0xFF, r & 0xFF, 0xFF]
+        payload += [0, 0, 0, 0]
+        bitmap = (1 if power else 0) | (2 if direction else 0) | (16 if self.super_response else 0)
+        payload += [bitmap, _lvl(brightness), _clamp(int(mode), 0, 21), _lvl(speed, 3),
+                    self.SLEEP_CODE, color_id & 0xFF, color_id & 0xFF]
+        self._write_frames([pack_frame(CMD_PRGB, payload)])
+
+    def _enter_custom(self, brightness=None, speed=3, force=False):
+        b = self._bright if brightness is None else _lvl(brightness)
+        if force or not self._custom or b != self._bright:
+            self._bright = b
+            self._send_prgb(LIGHT_MODE_CUSTOM, b, speed, 0, True, 0)
+            self._custom = True
+            self._key_rgb_sent.clear()
+
+    def _idx_colors_to_keyids(self, colors_by_index):
+        out = {}
+        items = list((colors_by_index or {}).items())
+        for prefer_canon in (True, False):
+            for idx, rgb in items:
+                idx = int(idx)
+                if (idx not in _MIRROR_SLOTS) != prefer_canon or not rgb or len(rgb) < 3:
+                    continue
+                k = self._kid(idx)
+                if k and k not in out:
+                    out[k] = (int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF)
+        return out
+
+    def _write_keys_rgb(self, cols, diff=False):
+        entries = []
+        for k in ALL_KEY_IDS:
+            rgb = cols.get(k)
+            if rgb is None or (diff and self._key_rgb_sent.get(k) == rgb):
+                continue
+            entries.append((k,) + tuple(rgb))
+        if entries:
+            self._write_frames(krgb_frames(entries), timeout=0.04)
+            for e in entries:
+                self._key_rgb_sent[e[0]] = e[1:]
+
+    def set_lighting(self, mode, fg, bg=(0, 0, 0), brightness=4, speed=3,
+                     direction=0, full_color=0, power_on=True):
+        fg = tuple(int(c) & 0xFF for c in fg[:3]) if fg else (255, 255, 255)
+        mode = int(mode)
+        self._palette = [fg] + list(self.DEFAULT_PALETTE[1:])
+        cid = LIGHT_RAINBOW_ID if full_color else 0
+        self._key_rgb_sent.clear()
+        if not power_on or _lvl(brightness) == 0:
+            self._send_prgb(mode if mode <= 20 else 0, 0, speed, direction, False, cid)
+            self._custom = False
+            return True
+        self._bright = _lvl(brightness)
+        if mode == 0 and not full_color and self.STATIC_VIA_PERKEY:
+            self._enter_custom(brightness, speed, force=True)
+            self._key_rgb = {k: fg for k in ALL_KEY_IDS}
+            self._write_keys_rgb(self._key_rgb)
+        elif mode == LIGHT_MODE_CUSTOM:
+            self._enter_custom(brightness, speed, force=True)
+            if self._key_rgb:
+                self._write_keys_rgb(self._key_rgb)
+        else:
+            self._send_prgb(mode, brightness, speed, direction, True, cid)
+            self._custom = False
+        return True
+
+    def set_per_key_rgb(self, colors_by_index, brightness=4, speed=3):
+        upd = self._idx_colors_to_keyids(colors_by_index)
+        if not upd:
+            return True
+        self._key_rgb.update(upd)
+        self._enter_custom(brightness, speed)
+        self._write_keys_rgb({k: self._key_rgb.get(k, (0, 0, 0)) for k in ALL_KEY_IDS})
+        return True
+
+    def begin_host_stream(self):
+        self._key_rgb_sent.clear()
+        return True
+
+    def end_host_stream(self):
+        return True
+
+    def stream_frame(self, colors_by_index, force=False):
+        if not colors_by_index:
+            return True
+        now = time.perf_counter()
+        if not force and now - self._last_stream_ts < STREAM_MIN_INTERVAL_S:
+            return True
+        self._last_stream_ts = now
+        cols = {k: (0, 0, 0) for k in ALL_KEY_IDS}
+        cols.update(self._idx_colors_to_keyids(colors_by_index))
+        fresh = not self._custom
+        self._enter_custom()
+        self._write_keys_rgb(cols, diff=not (force or fresh))
+        return True
+
+    # ---- remap
+    def write_keymap(self, defaults, remaps, layer_indices, fn_layer_raw, restore_indices=()):
+        records = []
+        for idx in restore_indices or ():
+            k = self._kid(idx)
+            if k:
+                self._remap_cache.pop(k, None)
+                records.append((k, PROP_FN0, k))
+        for idx, target in (remaps or {}).items():
+            k = self._kid(idx)
+            if k:
+                self._remap_cache[k] = int(target) & 0xFFFF
+                records.append((k, PROP_FN0, int(target) & 0xFFFF))
+        if records:
+            self._write_frames(layout_frames(records))
+        return True
+
+    def set_key_remap(self, idx, hid_usage, modifiers=0):
+        k = self._kid(idx)
+        if k:   # modifier encoding in Fn0 is unknown -> plain HID usage only
+            self._write_frames(layout_frames([(k, PROP_FN0, int(hid_usage) & 0xFF)]))
+        return True
+
+    def read_keymap_layer(self, fn_layer=False):
+        return None
+
+    # ---- advanced keys
+    def _set_adv(self, key_ids, adv):
+        recs = []
+        for k in key_ids:
+            st = self._ks(k)
+            st.adv = adv
+            recs.append((k, PROP_MODE, st.mode_value()))
+        return recs
+
+    def set_socd(self, pairs):
+        frames, recs = [], []
+        for p in pairs or []:
+            k1 = int(p.get("key1_hid", 0)) & 0xFF
+            k2 = int(p.get("key2_hid", 0)) & 0xFF
+            if not (k1 and k2):
+                continue
+            mode = _clamp(int(p.get("model", p.get("mode", 0))), 0, 3)
+            frames.append(socd_frame(k1, k2, int(p.get("out1", k1)), int(p.get("out2", k2)), mode))
+            recs += self._set_adv((k1, k2), ADV_SOCD)
+        if frames:
+            self._write_frames(frames)
+            self._write_frames(layout_frames(recs))
+        return True
+
+    def set_advanced_socd(self, ia, ib, hid_a, hid_b, mode=3):
+        k1, k2 = self._kid(ia), self._kid(ib)
+        return self.set_socd([{"key1_hid": k1, "key2_hid": k2, "out1": hid_a or k1,
+                               "out2": hid_b or k2, "model": mode}])
+
+    def set_advanced_rs(self, ia, ib, hid_a, hid_b):
+        k1, k2 = self._kid(ia), self._kid(ib)
+        if k1 and k2:
+            self._write_frames([rs_frame(k1, k2)])
+            self._write_frames(layout_frames(self._set_adv((k1, k2), ADV_RS)))
+        return True
+
+    @staticmethod
+    def _delay10(delay):
+        d = int(delay)
+        return _clamp(int(round(d / 10.0)) if d > 25 else d, 1, 255)
+
+    def set_advanced_mt(self, idx, delay, tap_hid=0, hold_hid=0):
+        k = self._kid(idx)
+        if k:
+            self._write_frames([mt_frame(k, int(hold_hid or k), int(tap_hid or k), self._delay10(delay))])
+            self._write_frames(layout_frames(self._set_adv((k,), ADV_MT)))
+        return True
+
+    def set_advanced_tgl(self, idx, hid_usage=0):
+        k = self._kid(idx)
+        if k:
+            self._write_frames([tgl_frame(k, int(hid_usage or k), 20)])
+            self._write_frames(layout_frames(self._set_adv((k,), ADV_TGL)))
+        return True
+
+    def clear_advanced_key(self, idx):
+        k = self._kid(idx)
+        if k:   # keeps the key's fixed/RT touch mode
+            self._write_frames(layout_frames(self._set_adv((k,), ADV_NONE)))
+        return True
+
+    def read_key_records(self):
+        return [{"key_id": k, "mode": st.mode_value(), "actuation_mm": st.act,
+                 "rt": st.rt_kind, "rt_press_mm": st.rtp, "rt_release_mm": st.rtr,
+                 "dz_top_mm": st.dz_top, "dz_bottom_mm": st.dz_bot}
+                for k, st in self._keys.items()]
+
+    # ---- misc
+    def set_gamepad_mode(self, on):
+        return True   # gamepad is host-side (uses the live reader)
+
+    def list_macros(self):
+        return dict(self._macros)
+
+    def read_macro(self, slot):
+        return self._macros.get(int(slot))
+
+    def write_macro(self, slot, events, play_mode=0, repeat_count=1):
+        if events is None:
+            self._macros.pop(int(slot), None)
+        else:
+            self._macros[int(slot)] = {"events": list(events), "play_mode": int(play_mode),
+                                       "repeat_count": int(repeat_count)}
+        return True
+
+    def read_macro_bindings(self):
+        return dict(self._macro_bindings)
+
+    def bind_macro(self, idx, slot, play_mode=None, repeat_count=None, **kw):
+        self._macro_bindings[int(idx)] = int(slot)
+        return True
+
+    def unbind_key(self, idx, **kw):
+        self._macro_bindings.pop(int(idx), None)
+        return True
+
+    def send_raw(self, payload):
+        body = [int(b) & 0xFF for b in list(payload)[:64]]
+        body += [0] * (64 - len(body))
+        if body[0] == HEAD and body[3] == 0:
+            body[3] = aula_checksum(body)
+        r = transact(self.dev, self.lock, [REPORT_ID] + body, 0.1)
+        log.info("raw TX %s -> RX %s", bytes(body).hex(" "), bytes(r or []).hex(" "))
+        return True
