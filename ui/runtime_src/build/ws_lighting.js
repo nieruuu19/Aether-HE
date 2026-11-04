@@ -158,9 +158,21 @@
     } catch {}
     return [...DEFAULT_SAVED_COLORS];
   };
+  const SAVED_COLORS_EVENT = "aether-saved-colors-changed";
   const storeSavedColors = (slug, list) => {
     try {
       localStorage.setItem(savedColorsKey(slug), JSON.stringify(list));
+    } catch {}
+    /* Two widgets own this library (Color Palette and Per-key Paint). They sit
+       mounted side by side, so whichever is hidden keeps a stale copy unless
+       the write announces itself. */
+    try {
+      window.dispatchEvent(new CustomEvent(SAVED_COLORS_EVENT, {
+        detail: {
+          slug,
+          list
+        }
+      }));
     } catch {}
   };
 
@@ -1207,6 +1219,15 @@
       setSavedColors(next);
       storeSavedColors(boardSlug, next);
     };
+    useEffect(() => {
+      const h = e => {
+        const d = e && e.detail;
+        if (!d || d.slug !== boardSlug) return;
+        setSavedColors(d.list);
+      };
+      window.addEventListener(SAVED_COLORS_EVENT, h);
+      return () => window.removeEventListener(SAVED_COLORS_EVENT, h);
+    }, [boardSlug]);
     // Draft for the slot hex field — same rule as bgText: only a complete
     // #RRGGBB reaches the board, so typing "#f" cannot flash black.
     const slotHex = palette[colorSlot] || "#000000";
@@ -1508,7 +1529,7 @@
       }
     }))))))) : /*#__PURE__*/React.createElement("div", {
       className: "font-mono text-[11px] text-[var(--text-faint)]"
-    }, "Custom mode drives colors per Effect Zone (see the Effect Preview widget) \u2014 the shared palette is hidden while Custom is active."), bgSupported ? /*#__PURE__*/React.createElement("div", {
+    }, "Custom mode drives colors per Effect Zone (see the Effect Preview widget) \u2014 the shared palette is hidden while Custom is active. Per-key colours, including saved ones, are picked in the Per-key Paint widget."), bgSupported ? /*#__PURE__*/React.createElement("div", {
       className: "glass p-4"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between mb-2.5"
@@ -1638,16 +1659,84 @@
       ledMap
     } = ctx;
     const palette = colors || [];
-    const [activeSlot, setActiveSlot] = useState(0);
+    const bctx = boardCtxOf(ctx);
+    const boardSlug = bctx.board && bctx.board.slug || null;
+    const [savedColors, setSavedColors] = useState(() => loadSavedColors(boardSlug));
+    const savedSlug = useRef(boardSlug);
+    useEffect(() => {
+      if (savedSlug.current === boardSlug) return;
+      savedSlug.current = boardSlug;
+      setSavedColors(loadSavedColors(boardSlug));
+    }, [boardSlug]);
+    const commitSaved = next => {
+      setSavedColors(next);
+      storeSavedColors(boardSlug, next);
+    };
+    useEffect(() => {
+      const h = e => {
+        const d = e && e.detail;
+        if (!d || d.slug !== boardSlug) return;
+        setSavedColors(d.list);
+      };
+      window.addEventListener(SAVED_COLORS_EVENT, h);
+      return () => window.removeEventListener(SAVED_COLORS_EVENT, h);
+    }, [boardSlug]);
+
+    /* One active paint colour, fed by either the board's stored slots or the
+       saved-colour library. Custom mode writes it per key as raw RGB, so any
+       colour can be painted — the seven firmware slots are shortcuts, not the
+       limit. */
+    const [paintColor, setPaintColor] = useState(() => palette[0] || "#ffffff");
+    const [activeKey, setActiveKey] = useState(palette[0] ? "slot:0" : null);
+    const [paintText, setPaintText] = useState(() => palette[0] || "#ffffff");
+    const picked = useRef(false);
+    useEffect(() => {
+      if (picked.current || !palette[0]) return;
+      setPaintColor(palette[0]);
+      setPaintText(palette[0]);
+      setActiveKey("slot:0");
+    }, [palette.length]);
+    const pickColor = (c, key) => {
+      picked.current = true;
+      setPaintColor(c);
+      setPaintText(c);
+      setActiveKey(key);
+    };
+    const setActiveColor = c => {
+      picked.current = true;
+      setPaintColor(c);
+      setPaintText(c);
+      setActiveKey(null);
+    };
+    const addSaved = c => {
+      if (savedColors.length >= SAVED_COLORS_CAP) {
+        setActiveColor(c);
+        return;
+      }
+      const next = [...savedColors, c];
+      commitSaved(next);
+      pickColor(c, "saved:" + (next.length - 1));
+    };
+    const editSaved = (i, c) => {
+      commitSaved(savedColors.map((x, j) => j === i ? c : x));
+      if (activeKey === "saved:" + i) setActiveColor(c);
+    };
+    const removeSaved = i => {
+      commitSaved(savedColors.filter((_, j) => j !== i));
+      if (activeKey === "saved:" + i) {
+        setPaintColor(palette[0] || "#ffffff");
+        setPaintText(palette[0] || "#ffffff");
+        setActiveKey(null);
+      }
+    };
     const selCount = selectedKeys ? selectedKeys.size : 0;
     const assignToSelection = () => {
       if (!selectedKeys || selectedKeys.size === 0) return;
-      const c = palette[activeSlot] || palette[0] || "#ffffff";
       const next = {
         ...(perKeyColors || {})
       };
       selectedKeys.forEach(code => {
-        next[code] = c;
+        next[code] = paintColor;
       });
       setPerKeyColors(next);
     };
@@ -1673,18 +1762,85 @@
       className: "flex flex-col gap-4"
     }, palette.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "font-display text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)] mb-2"
-    }, "Active slot"), /*#__PURE__*/React.createElement("div", {
+    }, "On the keyboard"), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2"
     }, palette.map((c, i) => /*#__PURE__*/React.createElement("button", {
       key: i,
-      onClick: () => setActiveSlot(i),
-      className: `w-9 h-9 rounded-lg ring-1 transition-all ${activeSlot === i ? "ring-2 ring-white/80 scale-110" : "ring-white/10 hover:scale-105"}`,
+      onClick: () => pickColor(c, "slot:" + i),
+      className: `w-9 h-9 rounded-lg ring-1 transition-all ${activeKey === "slot:" + i ? "ring-2 ring-white/80 scale-110" : "ring-white/10 hover:scale-105"}`,
       style: {
         background: c,
         boxShadow: `0 0 12px ${c}55`
       },
-      title: c.toUpperCase()
-    })))), /*#__PURE__*/React.createElement("div", {
+      title: `Color${i + 1} · ${c.toUpperCase()}`
+    })))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-baseline justify-between mb-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-display text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]"
+    }, "Saved colors \xB7 ", savedColors.length), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[10px] text-[var(--text-faint)]"
+    }, "add, edit or remove")), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-1.5"
+    }, savedColors.map((c, i) => /*#__PURE__*/React.createElement("div", {
+      key: i,
+      className: "relative group"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => pickColor(c, "saved:" + i),
+      title: c.toUpperCase(),
+      className: `block w-9 h-9 rounded-lg ring-1 transition-all ${activeKey === "saved:" + i ? "ring-2 ring-white/80 scale-110" : "ring-white/10 hover:scale-105"}`,
+      style: {
+        background: c,
+        boxShadow: `0 0 12px ${c}55`
+      }
+    }), /*#__PURE__*/React.createElement("label", {
+      title: "Edit colour",
+      className: "absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-slate-900 ring-1 ring-white/20 grid place-items-center text-[8px] leading-none text-slate-300 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+    }, "\u270E", /*#__PURE__*/React.createElement("input", {
+      type: "color",
+      value: c,
+      onChange: e => editSaved(i, e.target.value),
+      className: "sr-only"
+    })), /*#__PURE__*/React.createElement("button", {
+      onClick: () => removeSaved(i),
+      title: "Remove",
+      className: "absolute -top-1.5 -left-1.5 w-3.5 h-3.5 rounded-full bg-slate-900 ring-1 ring-white/20 grid place-items-center text-[8px] leading-none text-slate-300 hover:text-rose-300 opacity-0 group-hover:opacity-100 transition-opacity"
+    }, "\u2715"))), savedColors.length < SAVED_COLORS_CAP && /*#__PURE__*/React.createElement("label", {
+      title: "Add a colour",
+      className: "w-9 h-9 rounded-lg border border-dashed border-[var(--line)] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] hover:text-white grid place-items-center cursor-pointer transition-colors"
+    }, IPlus ? /*#__PURE__*/React.createElement(IPlus, {
+      size: 12
+    }) : "+", /*#__PURE__*/React.createElement("input", {
+      type: "color",
+      defaultValue: paintColor,
+      onChange: e => addSaved(e.target.value),
+      className: "sr-only"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "relative w-11 h-9 rounded-lg overflow-hidden ring-1 ring-white/10 shrink-0",
+      style: {
+        background: paintColor,
+        boxShadow: `0 0 14px ${paintColor}55`
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "color",
+      value: paintColor,
+      onChange: e => setActiveColor(e.target.value),
+      title: "Paint colour",
+      className: "absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+    })), /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      value: (paintText || "").toUpperCase(),
+      maxLength: 7,
+      onChange: e => {
+        const v = e.target.value;
+        setPaintText(v);
+        if (isHexColor(v)) setActiveColor(v);
+      },
+      className: "w-[104px] h-9 px-2.5 rounded-lg bg-[rgba(5,11,14,0.5)] border border-[var(--line)] font-mono text-[12px] text-[var(--text)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[10.5px] text-[var(--text-dim)]"
+    }, "paint colour"))), /*#__PURE__*/React.createElement("div", {
       className: "glass p-4"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center justify-between mb-3"
@@ -1710,7 +1866,7 @@
         background: "var(--accent-gradient, var(--accent))",
         boxShadow: "0 8px 24px -8px var(--accent-glow)"
       }
-    }, "Paint selected with slot ", activeSlot + 1), /*#__PURE__*/React.createElement("button", {
+    }, "Paint selected \xB7 ", paintColor.toUpperCase()), /*#__PURE__*/React.createElement("button", {
       onClick: clearPerKeyForSelection,
       disabled: !selectedKeys || selectedKeys.size === 0,
       className: "px-3 h-10 rounded-lg border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-white hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] disabled:opacity-40 font-display text-[11.5px] uppercase tracking-[0.18em]"
