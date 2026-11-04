@@ -1200,6 +1200,14 @@
       const LBH = window.AetherWorkspaces && window.AetherWorkspaces.LIGHTING_BOARD;
       const bl = board && board.lighting || null;
       const keys = window.AetherKeyboard.KB_ROWS.flat();
+      // Board off or unplugged: nothing was sent to the LEDs, so the schematic
+      // must read dark instead of previewing a mode that isn't running.
+      if (!connected || !power) {
+        keys.forEach(([_, __, code]) => {
+          m[code] = "#000000";
+        });
+        return m;
+      }
       // Firmware-only boards: replay the effect look-alike (firmwareSimFrame)
       // instead of the frozen schematic.
       const fwFrame = LBH && LBH.firmwareSimFrame && fwSimOn ? LBH.firmwareSimFrame(bl, {
@@ -1243,7 +1251,7 @@
         m[code] = hit ? colors[idx % colors.length] : bgColor;
       });
       return m;
-    }, [section, colors, bgColor, colorSlot, perKeyColors, pattern, board, fwSimOn, simT, brightness, speed, direction, fullColor]);
+    }, [section, colors, bgColor, colorSlot, perKeyColors, pattern, board, fwSimOn, simT, brightness, speed, direction, fullColor, power, connected]);
     const selectedKey = useMemo(() => Array.from(selectedKeys)[0] || null, [selectedKeys]);
 
     /* ===== HID bridge: handlers ===== */

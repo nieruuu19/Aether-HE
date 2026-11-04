@@ -357,6 +357,12 @@ const previewSimColor = (bl, s, idx) => {
     return ["#ff0040", "#ff8a00", "#ffd400", "#1eff7a", "#00b7ff", "#9d4edd"][idx % 6];
   }
   if (s.pattern === "static") return colors[0];
+  /* Custom is a per-key picture, not an effect. app.jsx's ledMap paints every
+     key the user gave a colour to BEFORE consulting this fallback, and
+     set_custom_colors writes the complete map (unnamed keys black), so a key
+     that reaches here is genuinely off on the board. The palette scatter below
+     used to leave every sixth key lit over a dark board. */
+  if (s.pattern === "custom") return "#000000";
   const rule = modeRuleFor(bl, s.pattern);
   const legacyId = LIGHT_MODES.some(m => m.id === s.pattern);
   if (rule && s.pattern !== "custom" && (!legacyId || bl.hostEngine === false)) {
