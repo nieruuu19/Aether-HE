@@ -495,10 +495,11 @@ def test_win68max_lighting_table_matches_sparkplay():
         "Blooming Flowers", "Colorful Pattern", "Heavy Rain", "Eternal Pulse",
         "Traceless Steps", "Snow Blossoms", "Laser Beam", "Water Ripples"]
     assert by_byte[0]["name"] == "Static" and by_byte[21]["name"] == "Custom"
-    # Only Snow Blossoms (18) is colour-locked — red and green inputs both
-    # produced the same red/cyan/green mix on hardware; bytes 5/6 followed
-    # the palette. No mode has a background (PRGB has no bg field).
-    assert {b for b, m in by_byte.items() if not m["color"]} == {18}
+    # Every mode, Snow Blossoms included, takes the palette colour — the
+    # vendor's own Color Setting is offered for it, and the board's dyn
+    # colour id was confirmed to change on write. No mode has a background
+    # (PRGB has no bg field).
+    assert {b for b, m in by_byte.items() if not m["color"]} == set()
     assert not any(m["bg"] for m in lt["modes"]), "PRGB has no background field"
     assert all(m["fullColor"] for m in lt["modes"] if m["byte"] != 21)
     assert {b for b, m in by_byte.items() if not m["speed"]} == {0, 21}

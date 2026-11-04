@@ -129,7 +129,7 @@ _FALLBACK_LIGHT_MODES = [
     ("comet", 16, "Eternal Pulse", True),
     ("tide", 17, "Traceless Steps", True),
     ("custom", 21, "Custom", True),
-    ("snow-blossoms", 18, "Snow Blossoms", False),
+    ("snow-blossoms", 18, "Snow Blossoms", True),
     ("laser-beam", 19, "Laser Beam", True),
     ("water-ripples", 20, "Water Ripples", True),
 ]

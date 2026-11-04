@@ -1383,7 +1383,7 @@
             "byte": 18,
             "name": "Snow Blossoms",
             "speed": true,
-            "color": false,
+            "color": true,
             "bg": false,
             "fullColor": true,
             "direction": true
