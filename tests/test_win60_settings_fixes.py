@@ -370,6 +370,31 @@ def test_api_set_light_and_custom_colors_reach_the_clamp():
     assert (mode10[7], mode10[8]) == (4, 0)
 
 
+def test_set_custom_colors_sends_the_complete_picture():
+    """The per-key map is authoritative: unnamed keys go black, empty map is
+    'Custom mode, board off'. The SparkPlay KRGB buffer and the MINI's
+    cumulative table would otherwise keep a reset key lit."""
+    class _Rec:
+        def __init__(self):
+            self.calls = []
+
+        def set_per_key_rgb(self, colors, brightness=4, speed=4):
+            self.calls.append((dict(colors), brightness, speed))
+
+    d = _Rec()
+    a = _api(d)
+    assert a.set_custom_colors({"Z": [1, 2, 3]}, brightness=4, speed=2) == {"ok": True, "keys": 1}
+    colors, bri, spd = d.calls[-1]
+    assert (bri, spd) == (4, 2)
+    assert set(colors) == set(a.km.indices())
+    assert [k for k, v in colors.items() if v != (0, 0, 0)] == [a.km.index_of_code["Z"]]
+
+    assert a.set_custom_colors({}, brightness=3, speed=0) == {"ok": True, "keys": 0}
+    colors, bri, spd = d.calls[-1]
+    assert (bri, spd) == (3, 0)
+    assert all(v == (0, 0, 0) for v in colors.values())
+
+
 # --------------------------------------------------------- 5. send_raw --
 def test_dangerous_command_table_matches_vendor_source():
     body = lambda pkt: pkt[1:]

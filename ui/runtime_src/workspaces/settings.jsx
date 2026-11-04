@@ -397,14 +397,10 @@ function BackupWidget(ctx) {
   );
 }
 
-/* ===== About/Update widget ===== */
+/* ===== About widget ===== */
 function AboutWidget(ctx) {
   const { setWizardOpen, setSubmitOpen } = ctx;
   const [version, setVersion] = useState("—");
-  // `info` holds the check_update() result — apply_update REQUIRES the asset
-  // url/name from it (Api.apply_update(asset_url, asset_name)); calling it bare
-  // raises a missing-argument TypeError.
-  const [updateState, setUpdateState] = useState({ phase: "idle", msg: "", info: null });
 
   useEffect(() => {
     const api = window.pywebview?.api;
@@ -414,79 +410,7 @@ function AboutWidget(ctx) {
     }).catch(() => {});
   }, []);
 
-  const checkUpdate = async () => {
-    const api = window.pywebview?.api;
-    if (!api?.check_update) return;
-    setUpdateState({ phase: "checking", msg: "Checking for updates…", info: null });
-    try {
-      const r = await api.check_update();
-      if (!r?.ok) {
-        // Surface the real reason (rate limit, offline, DNS) instead of a bare
-        // "Check failed" — this is the only place the user can see it.
-        setUpdateState({ phase: "error", msg: `Check failed: ${r?.error || "unknown error"}`, info: null });
-        return;
-      }
-      // updater.check_for_update() returns `update` / `latest` / `asset_url`.
-      // (It has never returned `available` or `version`: reading those meant
-      // this button reported "You're up to date" even when a release existed.)
-      if (r.update) {
-        setUpdateState({ phase: "available", msg: `Update available: v${r.latest}`, info: r });
-      } else if (r.newer) {
-        // Newer release exists but ships no asset this OS can install.
-        setUpdateState({ phase: "uptodate", msg: `v${r.latest} available, but no installer for this platform`, info: null });
-      } else {
-        setUpdateState({ phase: "uptodate", msg: "You're up to date", info: null });
-      }
-    } catch (e) {
-      setUpdateState({ phase: "error", msg: `Check failed: ${e}`, info: null });
-    }
-  };
-
-  const applyUpdate = async () => {
-    const api = window.pywebview?.api;
-    const info = updateState.info;
-    if (!api?.apply_update || !info?.asset_url) return;
-    setUpdateState(s => ({ ...s, phase: "installing", msg: "Downloading…" }));
-    // The installer is ~20 MB; poll so the window isn't silently frozen. The
-    // timer is cleared in every exit path below (including the throw).
-    let poll = null;
-    if (api.update_progress) {
-      poll = setInterval(async () => {
-        try {
-          const p = await api.update_progress();
-          if (!p?.ok) return;
-          if (p.phase === "downloading" && p.total) {
-            const mb = (n) => (n / 1048576).toFixed(1);
-            setUpdateState(s => s.phase === "installing"
-              ? { ...s, msg: `Downloading… ${p.pct}%  (${mb(p.done)} / ${mb(p.total)} MB)` } : s);
-          } else if (p.phase === "verified") {
-            setUpdateState(s => s.phase === "installing" ? { ...s, msg: "Verifying download…" } : s);
-          } else if (p.phase === "installing") {
-            setUpdateState(s => s.phase === "installing" ? { ...s, msg: "Installing…" } : s);
-          }
-        } catch {}
-      }, 400);
-    }
-    const stop = () => { if (poll) { clearInterval(poll); poll = null; } };
-    try {
-      const r = await api.apply_update(info.asset_url, info.asset_name,
-                                       info.asset_size, info.asset_sha256);
-      stop();
-      if (!r?.ok) {
-        setUpdateState(s => ({ ...s, phase: "error", msg: `Installation failed: ${r?.error || "unknown error"}` }));
-        return;
-      }
-      // Windows launches the installer and the app must quit; Flatpak installs
-      // in place and needs a manual restart. Say which one happened.
-      const msg = r.quit ? "Installer launched — Aether will close and reopen."
-                : r.restart ? "Update installed — quit and reopen Aether to apply it."
-                : r.path ? `Downloaded to ${r.path}` : "Update complete";
-      setUpdateState(s => ({ ...s, phase: "installed", msg }));
-    } catch (e) {
-      stop();
-      setUpdateState(s => ({ ...s, phase: "error", msg: `Installation failed: ${e}` }));
-    }
-  };
+  // Updates are disabled in this build: nothing here calls GitHub.
 
   const openWizard = () => {
     if (setWizardOpen) setWizardOpen(true);
@@ -506,17 +430,14 @@ function AboutWidget(ctx) {
         <div className="font-mono text-[9px] text-[var(--text-faint)]">AetherHE Desktop Controller</div>
       </div>
 
+      <div className="rounded-lg border border-[var(--line)] bg-white/[0.02] p-3 mb-4">
+        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-faint)]">Updates disabled</div>
+        <div className="text-[11px] text-[var(--text-dim)] mt-1 leading-relaxed">
+          This build never checks GitHub or downloads an installer.
+        </div>
+      </div>
+
       <div className="flex flex-col gap-2 mb-4">
-        <button onClick={checkUpdate} disabled={updateState.phase === "checking"}
-          className="h-9 rounded-md border border-[var(--accent)]/50 bg-[var(--accent)]/15 text-[var(--accent)] font-display text-[11px] uppercase tracking-[0.16em] hover:bg-[var(--accent)]/25 disabled:opacity-50 transition-all">
-          {IRefresh ? "↻" : "Check"} Check for Updates
-        </button>
-        {(updateState.phase === "available" || updateState.phase === "installing") && (
-          <button onClick={applyUpdate} disabled={updateState.phase === "installing"}
-            className="h-9 rounded-md border border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--accent)] font-display text-[11px] uppercase tracking-[0.16em] hover:bg-[var(--accent)]/25 disabled:opacity-50 transition-all">
-            {updateState.phase === "installing" ? "Installing…" : "Install Update"}
-          </button>
-        )}
         <button onClick={openWizard}
           className="h-9 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] font-display text-[11px] uppercase tracking-[0.16em] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] transition-all">
           Setup Wizard
@@ -525,14 +446,6 @@ function AboutWidget(ctx) {
           Submit a board
         </button>
       </div>
-
-      {updateState.msg && (
-        <div className={`text-[11px] font-mono uppercase tracking-[0.16em] ${
-          updateState.phase === "error" ? "text-rose-300" : "text-[var(--text-faint)]"
-        }`}>
-          {updateState.msg}
-        </div>
-      )}
     </div>
   );
 }

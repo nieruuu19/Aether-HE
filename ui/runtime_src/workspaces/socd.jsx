@@ -46,11 +46,36 @@ const KeyGrid = ({ title, keys, picked, onPick }) => {
   );
 };
 
+/* SparkPlay boards (WIN 68 HE MAX) number their SOCD modes like the vendor's
+   SOCDOptions: 1 last input, 2 key 1 priority, 3 key 2 priority, 4 neutral.
+   The Win60's cmd-36 PRCS uses its own four models, so the labels follow the
+   active board instead of being hardcoded. */
+const SOCD_MODELS = {
+  sparkplay: [
+    { n: 1, label: "Back cover", desc: "Last key pressed wins." },
+    { n: 2, label: "Key 1 priority", desc: "Key 1 (red box) overrides Key 2." },
+    { n: 3, label: "Key 2 priority", desc: "Key 2 (blue box) overrides Key 1." },
+    { n: 4, label: "Neutral", desc: "Both keys cancel out; neither reports." },
+  ],
+  win60: [
+    { n: 1, label: "Model 1", desc: "First press wins; second is interrupted." },
+    { n: 2, label: "Model 2", desc: "Key1 interrupts Key2." },
+    { n: 3, label: "Model 3", desc: "Key2 interrupts Key1." },
+    { n: 4, label: "Model 4", desc: "Later-triggered key wins (Snap Tap)." },
+  ],
+};
+
 /* ===== Pair Editor Widget ===== */
 const PairEditorWidget = (ctx) => {
   const { socdProfiles, setSocdProfiles, socdActive, setSocdActive } = ctx;
   const [editTarget, setEditTarget] = useState("k1"); // "k1" or "k2"
+  const boardCtx = useBoardSafe();
+  const isSpark = !!(boardCtx && boardCtx.board && boardCtx.board.protocol === "protocol_sparkplay");
+  const models = isSpark ? SOCD_MODELS.sparkplay : SOCD_MODELS.win60;
   const cur = socdProfiles.find(p => p.id === socdActive) || socdProfiles[0];
+  const bind = cur?.bind == null ? 1 : cur.bind;
+  const delay = cur?.delay == null ? 10 : cur.delay;
+
 
   const updateActive = (patch) => {
     setSocdProfiles(ps => ps.map(p => p.id === socdActive ? { ...p, ...patch } : p));
@@ -62,14 +87,20 @@ const PairEditorWidget = (ctx) => {
     let n = 1;
     while (used.has(`SOCD${n}`)) n++;
     const next = `SOCD${n}`;
-    setSocdProfiles([...socdProfiles, { id: next, k1: "", k2: "", mode: 1 }]);
+    setSocdProfiles([...socdProfiles, { id: next, k1: "", k2: "", mode: 1,
+                                        ...(isSpark ? { bind: 1, delay: 10 } : {}) }]);
     setSocdActive(next);
   };
   const delActive = () => {
-    if (socdProfiles.length <= 1) return;
+    // Deleting the last pair leaves one blank slot: Apply with no complete
+    // pair is the path that clears SOCD on the keyboard, so removal must stay
+    // reachable even when this is the only profile.
     const remaining = socdProfiles.filter(p => p.id !== socdActive);
-    setSocdProfiles(remaining);
-    setSocdActive(remaining[0].id);
+    const next = remaining.length
+      ? remaining
+      : [{ id: "SOCD1", k1: "", k2: "", mode: 1, ...(isSpark ? { bind: 1, delay: 10 } : {}) }];
+    setSocdProfiles(next);
+    setSocdActive(next[0].id);
   };
 
   return (
@@ -103,19 +134,89 @@ const PairEditorWidget = (ctx) => {
         </div>
       </div>
 
+      {/* SparkPlay "Binding key values": each bound position carries its own value */}
+      {isSpark && bind === 1 && (
+        <div className="flex items-center gap-3">
+          <div className="flex-1">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--text-faint)] mb-1">Bound value 1</div>
+            <button onClick={() => setEditTarget("k1v")}
+              className={`w-full h-9 rounded-md border grid place-items-center font-mono text-[14px] transition-colors
+                           ${editTarget === "k1v"
+                             ? "border-[var(--accent)]/50 text-[var(--accent)] bg-[var(--accent)]/10 shadow-[0_0_8px_var(--accent-glow)]"
+                             : "border-[var(--accent)]/30 text-[var(--accent)] bg-[var(--accent)]/10 hover:shadow-[0_0_8px_var(--accent-glow)]"}`}>
+              {cur?.k1v || cur?.k1 || "—"}
+            </button>
+          </div>
+          <div className="text-[var(--text-faint)] mt-5 text-[13px]">↑</div>
+          <div className="flex-1">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--text-faint)] mb-1">Bound value 2</div>
+            <button onClick={() => setEditTarget("k2v")}
+              className={`w-full h-9 rounded-md border grid place-items-center font-mono text-[14px] transition-colors
+                           ${editTarget === "k2v"
+                             ? "border-[var(--accent)]/50 text-[var(--accent)] bg-[var(--accent)]/10 shadow-[0_0_8px_var(--accent-glow)]"
+                             : "border-[var(--accent)]/30 text-[var(--accent)] bg-[var(--accent)]/10 hover:shadow-[0_0_8px_var(--accent-glow)]"}`}>
+              {cur?.k2v || cur?.k2 || "—"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Mode selection */}
       <div className="grid grid-cols-2 gap-1.5">
-        {[1,2,3,4].map(m => (
-          <button key={m} onClick={() => updateActive({ mode: m })}
+        {models.map(({ n, label }) => (
+          <button key={n} onClick={() => updateActive({ mode: n })}
             className={`flex items-center gap-2 px-3 h-9 rounded-md border font-mono text-[12px] transition-all
-                        ${cur?.mode === m
+                        ${cur?.mode === n
                           ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]"
                           : "border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"}`}>
-            <span className={`w-3 h-3 rounded-full border ${cur?.mode === m ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--text-faint)]"}`}/>
-            Model {m}
+            <span className={`w-3 h-3 rounded-full border ${cur?.mode === n ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--text-faint)]"}`}/>
+            {label}
           </button>
         ))}
       </div>
+
+      {/* SparkPlay-only: bind mode + interaction delay (wired into the SOCD frame) */}
+      {isSpark && (
+        <div className="p-3 rounded-md border border-[var(--line)] bg-[rgba(5,11,14,0.5)] flex flex-col gap-3">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--text-faint)] mb-1.5">Binding</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {[
+                { v: 0, label: "Position", desc: "Pair the two physical keys." },
+                { v: 1, label: "Key values", desc: "Bind each position to a key value." },
+              ].map(({ v, label, desc }) => (
+                <button key={v} onClick={() => updateActive({ bind: v })}
+                  title={desc}
+                  className={`flex flex-col items-start px-3 py-2 rounded-md border font-mono text-[11.5px] transition-all
+                              ${bind === v
+                                ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]"
+                                : "border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"}`}>
+                  <span>{label}</span>
+                  <span className="text-[9px] text-[var(--text-faint)] mt-0.5">{desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--text-faint)]">Interaction delay</div>
+              <span className="font-mono text-[12px] text-[var(--accent)]">{delay} ms</span>
+            </div>
+            <input type="range" min={0} max={50} step={1} value={delay}
+              onChange={e => updateActive({ delay: Math.max(0, Math.min(50, +e.target.value)) })}
+              className="w-full"/>
+            <div className="flex justify-between font-mono text-[9px] text-[var(--text-faint)] mt-0.5">
+              <span>0 ms</span><span>50 ms</span>
+            </div>
+          </div>
+          <div className="text-[10.5px] leading-relaxed text-[var(--text-dim)]">
+            Both fields ride the SOCD frame: the firmware parses them only from 1.0.7 onward (the delay is a
+            16-bit millisecond count, clamped to 0–50 here). In key-values mode each position is bound to its
+            own value and both values are sent; in position mode the value slots go out empty. The labels come
+            from the vendor bundle — neither field changes which keys the firmware marks as the pair.
+          </div>
+        </div>
+      )}
 
       {/* Key picker grids */}
       {editTarget === "k1" && (
@@ -132,15 +233,28 @@ const PairEditorWidget = (ctx) => {
           <KeyGrid title="Extended Keys" keys={EXTENDED_KEYS} picked={cur?.k2} onPick={(k) => { updateActive({ k2: k }); setEditTarget(null); }}/>
         </div>
       )}
+      {editTarget === "k1v" && (
+        <div className="p-3 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/[0.05]">
+          <div className="font-display text-[10px] uppercase tracking-[0.16em] text-[var(--accent)] mb-2">Select Bound Value 1</div>
+          <KeyGrid title="Basic Keys" keys={BASIC_KEYS} picked={cur?.k1v || cur?.k1} onPick={(k) => { updateActive({ k1v: k }); setEditTarget("k2v"); }}/>
+          <KeyGrid title="Extended Keys" keys={EXTENDED_KEYS} picked={cur?.k1v || cur?.k1} onPick={(k) => { updateActive({ k1v: k }); setEditTarget("k2v"); }}/>
+        </div>
+      )}
+      {editTarget === "k2v" && (
+        <div className="p-3 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/[0.05]">
+          <div className="font-display text-[10px] uppercase tracking-[0.16em] text-[var(--accent)] mb-2">Select Bound Value 2</div>
+          <KeyGrid title="Basic Keys" keys={BASIC_KEYS} picked={cur?.k2v || cur?.k2} onPick={(k) => { updateActive({ k2v: k }); setEditTarget(null); }}/>
+          <KeyGrid title="Extended Keys" keys={EXTENDED_KEYS} picked={cur?.k2v || cur?.k2} onPick={(k) => { updateActive({ k2v: k }); setEditTarget(null); }}/>
+        </div>
+      )}
 
       {/* Mode descriptions */}
       <div className="rounded-md border border-[var(--line)] bg-[rgba(5,11,14,0.5)] p-3 text-[11.5px] text-[var(--text-dim)] leading-relaxed">
         <div className="text-[var(--text)] font-display uppercase tracking-[0.18em] text-[10.5px] mb-2">When both Key1 and Key2 fire:</div>
         <div className="space-y-1.5 font-mono text-[10px]">
-          <div><span className="text-[var(--accent)]">Model 1</span> · First press wins; second is interrupted.</div>
-          <div><span className="text-[var(--accent)]">Model 2</span> · Key1 interrupts Key2.</div>
-          <div><span className="text-[var(--accent)]">Model 3</span> · Key2 interrupts Key1.</div>
-          <div><span className="text-[var(--accent)]">Model 4</span> · Later-triggered key wins (Snap Tap).</div>
+          {models.map(({ n, label, desc }) => (
+            <div key={n}><span className="text-[var(--accent)]">{label}</span> · {desc}</div>
+          ))}
         </div>
       </div>
 
@@ -149,7 +263,7 @@ const PairEditorWidget = (ctx) => {
         <button onClick={addProfile} className="flex-1 flex items-center justify-center gap-1 h-8 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] font-display text-[11px] uppercase tracking-[0.16em]">
           {IPlus && <IPlus size={12}/>} New
         </button>
-        <button onClick={delActive} className="flex-1 flex items-center justify-center gap-1 h-8 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-rose-400/40 hover:text-rose-300 font-display text-[11px] uppercase tracking-[0.16em]">
+        <button onClick={delActive} title="Delete the selected pair. With no complete pair left, Apply clears SOCD on the keyboard." className="flex-1 flex items-center justify-center gap-1 h-8 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:border-rose-400/40 hover:text-rose-300 font-display text-[11px] uppercase tracking-[0.16em]">
           {ITrash && <ITrash size={12}/>} Delete
         </button>
       </div>

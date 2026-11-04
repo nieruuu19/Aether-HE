@@ -40,9 +40,19 @@
 > ### → [**Submit your keyboard**](https://github.com/MrWhosNexus/Aether-HE/issues/new?template=add-a-board.yml) · [How it works](docs/SUBMIT_A_BOARD.md)
 
 Cross-platform desktop controller for the Aula Win60 HE Hall-effect keyboard
-(VID `0x2E3C`, PID `0xC365`) and the Aula MINI 60 HE PRO (`0x0C45:0x80A2` wired,
-`0x0C45:0xFEFE` over its 2.4 GHz receiver). React/Tailwind UI rendered natively
-(Edge WebView2 on Windows, GTK/WebKit on Linux); HID is bridged to Python.
+(VID `0x2E3C`, PID `0xC365`), the Aula MINI 60 HE PRO (`0x0C45:0x80A2` wired,
+`0x0C45:0xFEFE` over its 2.4 GHz receiver), and — in this fork — the Aula
+**WIN 68 HE MAX** (`0x1CA2:0x1901`) and **WIN 60 HE MAX** (`0x1CA2:0x1902`).
+React/Tailwind UI rendered natively (Edge WebView2 on Windows, GTK/WebKit on
+Linux); HID is bridged to Python.
+
+> **This build (personal fork).** Adds `protocol_sparkplay.py`, the Aula
+> SparkPlay protocol decoded from the official web driver
+> (magnet.aulastar.com, protocol 1.0.9). The WIN 68 HE MAX and WIN 60 HE MAX are
+> driven end to end — lighting and per-key RGB, actuation + Rapid Trigger
+> (including read-back), dead band, SOCD, key remap, macros, calibration, polling
+> rate and the analog travel stream. Verified on a physical WIN 68 HE MAX
+> (firmware `App V1.1.4`).
 
 Features: per-key & multi-color animated lighting (host streaming, 60 fps),
 analog actuation + Rapid Trigger with a per-key view of the whole board, SOCD, key
@@ -91,9 +101,11 @@ Aether is built to grow beyond one board. If your keyboard isn't supported yet,
 | Aula MINI 60 HE PRO (wired) | Hall-effect | ✅ | ✅ | Fully supported — hardware-verified (#6) |
 | Aula MINI 60 HE PRO (2.4 GHz dongle) | Hall-effect | ✅ | ✅ | Supported over RF — firmware effects only, no host streaming (#6) |
 | Aula WIN 68 HE | Hall-effect | 🚧 | 🚧 | Bring-up — auto-detected, shares the Win60 protocol; not yet verified on hardware |
+| Aula WIN 60 HE MAX | Hall-effect | ✅ | ✅ | Fully supported — SparkPlay vendor protocol (0x1CA2:0x1902) |
+| Aula WIN 68 HE MAX | Hall-effect | ✅ | ✅ | Fully supported — SparkPlay vendor protocol (0x1CA2:0x1901) |
 | **Your board?** | — | — | — | **[Submit it →](https://github.com/MrWhosNexus/Aether-HE/issues/new?template=add-a-board.yml)** |
 
-**Recognised, but not drivable yet.** Aether identifies these boards, names them and draws their layout, but has no verified protocol for them — lighting and actuation stay switched off and they are not offered as selectable options anywhere in the app: **Aula KP-TE153** (Recognised and drawn from the vendor's own 69-key UK ISO layout, and it shares the Win60's protocol by USB identity — but no physical KP-TE153 has ever been driven by Aether, and the ISO PRCS hidCode remap leaves SOCD unverified for it. Not offered as a selectable board.), **Aula MINI60HE Max** (protocol decoded from a capture but never proven on hardware (#4)), **Aula MINI 60 HE PRO (alt PID 0x80B2)** (second hardware revision, no capture of its own (#6)), **Aula MINI 68 HE** (listed by the vendor driver, no capture), **Aula MINI 68 HE PRO** (listed by the vendor driver, no capture), **Aula MINI68 HE MAX** (listed by the vendor driver, no capture), **AULA F75 HE** (listed by the vendor driver, no capture), **Aula MINI60HE / MINI68HE MAX (2.4 GHz dongle)** (different transport from the decoded wired boards, no capture), **Aula Win60 HE Max** (layout added, needs captures (#5)), **Aula win68 HE Max** (layout added (65%), needs captures (#7)), **Aula WIN 60 HE Pro** (SayoDevice silicon (8089:0009). protocol_sayo reproduces the contributor's captures byte-for-byte, but nobody working on Aether owns this board, so no frame from Aether has ever reached one. Recognised, named and drawn; not offered.), **Aula F75 Tri-Mode** (in the registry, needs captures (#8)).
+**Recognised, but not drivable yet.** Aether identifies these boards, names them and draws their layout, but has no verified protocol for them — lighting and actuation stay switched off and they are not offered as selectable options anywhere in the app: **Aula KP-TE153** (Recognised and drawn from the vendor's own 69-key UK ISO layout, and it shares the Win60's protocol by USB identity — but no physical KP-TE153 has ever been driven by Aether, and the ISO PRCS hidCode remap leaves SOCD unverified for it. Not offered as a selectable board.), **Aula MINI60HE Max** (protocol decoded from a capture but never proven on hardware (#4)), **Aula MINI 60 HE PRO (alt PID 0x80B2)** (second hardware revision, no capture of its own (#6)), **Aula MINI 68 HE** (listed by the vendor driver, no capture), **Aula MINI 68 HE PRO** (listed by the vendor driver, no capture), **Aula MINI68 HE MAX** (listed by the vendor driver, no capture), **AULA F75 HE** (listed by the vendor driver, no capture), **Aula MINI60HE / MINI68HE MAX (2.4 GHz dongle)** (different transport from the decoded wired boards, no capture), **Aula WIN 60 HE Pro** (SayoDevice silicon (8089:0009). protocol_sayo reproduces the contributor's captures byte-for-byte, but nobody working on Aether owns this board, so no frame from Aether has ever reached one. Recognised, named and drawn; not offered.), **Aula F75 Tri-Mode** (in the registry, needs captures (#8)).
 <!-- BOARDS:END -->
 
 > This table is generated from [`data/boards.json`](data/boards.json) — it grows

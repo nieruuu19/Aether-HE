@@ -649,7 +649,7 @@
     className: `relative inline-block w-1.5 h-1.5 rounded-full pulse-ring ${connected ? "bg-[var(--good)] text-[var(--good)]" : "bg-[var(--text-faint)] text-[var(--text-faint)]"}`
   }), /*#__PURE__*/React.createElement("span", {
     className: "font-display text-[12.5px] tracking-[0.04em] text-[var(--text)]"
-  }, "WIN 60 HE"), /*#__PURE__*/React.createElement("span", {
+  }, "WIN 68 HE MAX"), /*#__PURE__*/React.createElement("span", {
     className: `font-mono text-[9.5px] uppercase tracking-[0.2em] ml-1 ${connected ? "text-[var(--good)]/85" : "text-[var(--text-faint)]"}`
   }, connected ? "Linked" : "Offline")), /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 pl-2 pr-2.5 h-9 rounded-xl border border-[var(--line)] cursor-pointer select-none",
@@ -740,62 +740,6 @@
   /* ============================================================
      App
      ============================================================ */
-  // Startup update gate: first-run opt-out prompt + the auto-install overlay.
-  // Driven by App's `updGate` state machine (idle | firstrun | updating | done | error).
-  function UpdateGate({
-    gate,
-    onChoose,
-    onDismiss
-  }) {
-    if (!gate || gate.phase === "idle") return null;
-    // Above the setup wizard (zIndex 9999): on a true first run the update
-    // decision is asked first, then dismisses to reveal onboarding underneath.
-    const backdrop = "fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm";
-    const card = "w-[430px] max-w-[92vw] rounded-2xl border border-[var(--line)] bg-[#0b1016] shadow-2xl p-5";
-    const btnPrimary = "px-3 h-9 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/15 text-[var(--accent)] font-display text-[10.5px] uppercase tracking-[0.16em] hover:bg-[var(--accent)]/25";
-    const btnGhost = "px-3 h-9 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text)] font-display text-[10.5px] uppercase tracking-[0.16em] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]";
-    if (gate.phase === "firstrun") {
-      return /*#__PURE__*/React.createElement("div", {
-        className: backdrop
-      }, /*#__PURE__*/React.createElement("div", {
-        className: card
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "font-display text-[14px] uppercase tracking-[0.16em] text-[var(--text)]"
-      }, "Keep Aether up to date?"), /*#__PURE__*/React.createElement("div", {
-        className: "text-[12.5px] text-[var(--text-dim)] mt-2 leading-relaxed"
-      }, "Aether can install new releases automatically when you open it. You can change this any time in Settings."), /*#__PURE__*/React.createElement("div", {
-        className: "mt-4 flex gap-2"
-      }, /*#__PURE__*/React.createElement("button", {
-        onClick: () => onChoose(true),
-        className: btnPrimary
-      }, "Yes, auto-update"), /*#__PURE__*/React.createElement("button", {
-        onClick: () => onChoose(false),
-        className: btnGhost
-      }, "No, I'll check manually"))));
-    }
-    const dismissable = gate.phase === "done" || gate.phase === "error";
-    return /*#__PURE__*/React.createElement("div", {
-      className: backdrop
-    }, /*#__PURE__*/React.createElement("div", {
-      className: card
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "font-display text-[14px] uppercase tracking-[0.16em] text-[var(--text)]"
-    }, gate.phase === "error" ? "Update error" : "Updating Aether"), /*#__PURE__*/React.createElement("div", {
-      className: `text-[12.5px] mt-2 leading-relaxed ${gate.phase === "error" ? "text-rose-300/90" : "text-[var(--text-dim)]"}`
-    }, gate.msg || "Working…"), gate.phase === "updating" && /*#__PURE__*/React.createElement("div", {
-      className: "mt-3 h-1 rounded-full bg-white/[0.06] overflow-hidden"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "h-full bg-[var(--accent)]/70 animate-pulse",
-      style: {
-        width: "40%"
-      }
-    })), dismissable && /*#__PURE__*/React.createElement("div", {
-      className: "mt-4 flex justify-end"
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: onDismiss,
-      className: btnGhost
-    }, gate.phase === "done" ? "OK" : "Dismiss"))));
-  }
   function App() {
     const [theme, setTheme] = useTheme();
     const [themeOpen, setThemeOpen] = useState(false);
@@ -815,141 +759,9 @@
     };
     const [submitOpen, setSubmitOpen] = useState(false);
 
-    // ---- auto-update on launch (first-run opt-out) ----
-    // On mount, read the persisted preference: null -> first-run prompt; true ->
-    // silently check and auto-install; false -> nothing. The updating overlay only
-    // appears once an update is confirmed, so there is no flash when up to date.
-    const [updGate, setUpdGate] = useState({
-      phase: "idle",
-      info: null,
-      msg: ""
-    });
-    const updRan = useRef(false);
-    const dismissUpdate = () => setUpdGate({
-      phase: "idle",
-      info: null,
-      msg: ""
-    });
-    const runUpdateFlow = async (api, showChecking) => {
-      if (showChecking) setUpdGate({
-        phase: "updating",
-        info: null,
-        msg: "Checking for updates…"
-      });
-      let chk;
-      try {
-        chk = await api.check_update();
-      } catch {
-        if (showChecking) dismissUpdate();
-        return;
-      }
-      if (!chk || !chk.ok || !chk.update) {
-        if (showChecking) dismissUpdate();
-        return;
-      }
-      setUpdGate({
-        phase: "updating",
-        info: chk,
-        msg: `Updating Aether to v${chk.latest}…`
-      });
-      // Poll download progress so the launch overlay reports movement rather than
-      // sitting on one line for a ~20 MB download.
-      let poll = null;
-      if (api.update_progress) {
-        poll = setInterval(async () => {
-          try {
-            const p = await api.update_progress();
-            if (!p?.ok) return;
-            const mb = n => (n / 1048576).toFixed(1);
-            if (p.phase === "downloading" && p.total) {
-              setUpdGate(g => g.phase === "updating" ? {
-                ...g,
-                msg: `Downloading v${chk.latest}… ${p.pct}%  (${mb(p.done)} / ${mb(p.total)} MB)`
-              } : g);
-            } else if (p.phase === "verified") {
-              setUpdGate(g => g.phase === "updating" ? {
-                ...g,
-                msg: "Verifying download…"
-              } : g);
-            }
-          } catch {}
-        }, 400);
-      }
-      const stopPoll = () => {
-        if (poll) {
-          clearInterval(poll);
-          poll = null;
-        }
-      };
-      try {
-        const r = await api.apply_update(chk.asset_url, chk.asset_name, chk.asset_size, chk.asset_sha256);
-        stopPoll();
-        if (!r || !r.ok) {
-          setUpdGate({
-            phase: "error",
-            info: chk,
-            msg: r?.error || "update failed"
-          });
-          return;
-        }
-        if (r.quit) setUpdGate({
-          phase: "done",
-          info: chk,
-          msg: "Installer launched — Aether will close and reopen."
-        });else if (r.restart) setUpdGate({
-          phase: "done",
-          info: chk,
-          msg: "Update installed — quit and reopen Aether to apply it."
-        });else setUpdGate({
-          phase: "done",
-          info: chk,
-          msg: r.path ? `Downloaded to ${r.path}` : "Downloaded."
-        });
-      } catch (e) {
-        stopPoll();
-        setUpdGate({
-          phase: "error",
-          info: chk,
-          msg: String(e)
-        });
-      }
-    };
-    const chooseAutoUpdate = async yes => {
-      const api = getApi();
-      try {
-        await api?.set_auto_update?.(yes);
-      } catch {}
-      if (yes) await runUpdateFlow(api, true);else dismissUpdate();
-    };
-    useEffect(() => {
-      let tries = 0,
-        timer = null;
-      const run = async () => {
-        const api = getApi();
-        if (!api?.get_auto_update) {
-          if (tries++ < 40) timer = setTimeout(run, 200);
-          return;
-        }
-        if (updRan.current) return;
-        updRan.current = true;
-        let pref;
-        try {
-          const r = await api.get_auto_update();
-          pref = r && r.autoUpdate;
-        } catch {
-          return;
-        }
-        if (pref === null || pref === undefined) setUpdGate({
-          phase: "firstrun",
-          info: null,
-          msg: ""
-        });else if (pref === true) runUpdateFlow(api, false);
-      };
-      run();
-      return () => {
-        if (timer) clearTimeout(timer);
-      };
-    }, []);
+    // Automatic update checks and downloads are disabled in this build: launch
+    // never contacts the update service, and there is no first-run prompt. The
+    // manual button in Settings/About still works when the user asks for it.
 
     // User zoom multiplier (top-bar − / % / + control), on top of the auto-fit.
     const [uiZoom, setUiZoom] = useState(() => {
@@ -1044,11 +856,12 @@
     const [travelTest, setTravelTest] = useState(false);
     const [liveDepths, setLiveDepths] = useState(null); // real per-key travel (mm)
     const [lightFrame, setLightFrame] = useState(null); // live effect frame {code:[r,g,b]}
+    const [simT, setSimT] = useState(0); // clock for the firmware-effect look-alike
     const [calibrating, setCalibrating] = useState(false);
     const [calibratedKeys, setCalibratedKeys] = useState(() => new Set()); // codes confirmed calibrated by firmware
     const [lightNonce, setLightNonce] = useState(0); // bump to force-resend lighting (e.g. after calibration)
-    const [deadTop, setDeadTop] = useState(0.04);
-    const [deadBottom, setDeadBottom] = useState(0.05);
+    const [deadTop, setDeadTop] = useState(0.20);
+    const [deadBottom, setDeadBottom] = useState(0.20);
     const [switchId, setSwitchId] = useState("hm1");
     // Per-key actuation as the firmware actually stores it. Populated by reading
     // the device on connect and after every Apply so the board renders each key
@@ -1091,6 +904,9 @@
 
     // Out-of-the-box: RGB radar (user pref).
     const [colors, setColors] = useState(["#ff0040", "#ff8a00", "#ffd400", "#1eff7a", "#00b7ff", "#9d4edd"]);
+    // Which of the seven board-stored colours the firmware effect uses (the
+    // vendor UI's Color1..Color7 selection; meaningless on host-engine boards).
+    const [colorSlot, setColorSlot] = useState(0);
     const [bgColor, setBgColor] = useState("#000000");
     const [perKeyColors, setPerKeyColors] = useState({});
     const [zones, setZones] = useState([]); // effect zones for Custom mode
@@ -1113,12 +929,9 @@
       k1: "A",
       k2: "D",
       mode: 1,
+      bind: 1,
+      delay: 10,
       active: true
-    }, {
-      id: "SOCD2",
-      k1: "W",
-      k2: "S",
-      mode: 1
     }]);
     const [socdActive, setSocdActive] = useState("SOCD1");
 
@@ -1131,6 +944,7 @@
       pattern,
       colors,
       bgColor,
+      colorSlot,
       brightness,
       speed,
       power,
@@ -1162,6 +976,7 @@
       set(s.pattern, setPattern);
       set(s.colors, setColors);
       set(s.bgColor, setBgColor);
+      set(s.colorSlot, setColorSlot);
       set(s.brightness, setBrightness);
       set(s.speed, setSpeed);
       set(s.power, setPower);
@@ -1265,7 +1080,7 @@
         }, 120);
         return next;
       });
-    }, [hydrated, activeId, pattern, colors, bgColor, brightness, speed, power, fullColor, direction, striOrient, bgBright, perKeyColors, zones, actuation, rtPress, rtRelease, rtEnabled, polling, deadTop, deadBottom, switchId, socdProfiles, socdActive, layer, gamepadMap, autoConnect, section]);
+    }, [hydrated, activeId, pattern, colors, bgColor, colorSlot, brightness, speed, power, fullColor, direction, striOrient, bgBright, perKeyColors, zones, actuation, rtPress, rtRelease, rtEnabled, polling, deadTop, deadBottom, switchId, socdProfiles, socdActive, layer, gamepadMap, autoConnect, section]);
 
     // Force a synchronous flush before the window closes / page unloads, so the
     // 120ms debounce never costs us the last edit.
@@ -1342,6 +1157,33 @@
       }
     };
     const keyboardMode = section === "actuation" ? "actuation" : section === "lighting" ? "lighting" : section === "socd" ? "socd" : "keymap";
+
+    // A firmware-only board renders dynamic effects inside the keyboard and
+    // reports no per-key RGB (get_light_frame stays empty), so the Live Keyboard
+    // replays a host-side look-alike instead. Clock it only while it is visible.
+    const fwSimOn = section === "lighting" && connected && power && !!board && !!board.lighting && board.lighting.hostEngine === false && pattern !== "custom" && pattern !== "static";
+    useEffect(() => {
+      if (!fwSimOn) {
+        setSimT(0);
+        return;
+      }
+      let t0 = null;
+      let raf = 0;
+      setSimT(0);
+      // FirmwareSimFrame interpolates between table phases, so the preview has to
+      // be re-rendered more often than a phase lasts (5-10 per second here) or it
+      // just steps through the table's keyframes and looks frozen next to a board
+      // that is animating continuously.
+      const step = () => {
+        raf = requestAnimationFrame(step);
+        if (document.hidden) return;
+        const now = Date.now();
+        if (t0 === null) t0 = now;
+        setSimT((now - t0) / 1000);
+      };
+      raf = requestAnimationFrame(step);
+      return () => cancelAnimationFrame(raf);
+    }, [fwSimOn, pattern]);
     const ledMap = useMemo(() => {
       if (section !== "lighting") return {};
       const m = {};
@@ -1357,7 +1199,28 @@
       // inline sim below is byte-identical to the previous shipped code.
       const LBH = window.AetherWorkspaces && window.AetherWorkspaces.LIGHTING_BOARD;
       const bl = board && board.lighting || null;
-      window.AetherKeyboard.KB_ROWS.flat().forEach(([_, __, code], idx) => {
+      const keys = window.AetherKeyboard.KB_ROWS.flat();
+      // Firmware-only boards: replay the effect look-alike (firmwareSimFrame)
+      // instead of the frozen schematic.
+      const fwFrame = LBH && LBH.firmwareSimFrame && fwSimOn ? LBH.firmwareSimFrame(bl, {
+        pattern,
+        colors,
+        bgColor,
+        colorSlot,
+        brightness,
+        speed,
+        direction,
+        fullColor
+      }, keys.map(k => k[2]), simT) : null;
+      keys.forEach(([_, __, code], idx) => {
+        // Per-key paint only reaches the board in Custom mode (set_custom_colors).
+        // Under a dynamic firmware effect the board plays the effect, so letting
+        // a painted (or stale, fully-painted) table sit on top made the Live
+        // Keyboard look frozen no matter what mode was selected.
+        if (fwFrame && fwFrame[code]) {
+          m[code] = fwFrame[code];
+          return;
+        }
         if (perKeyColors[code]) {
           m[code] = perKeyColors[code];
           return;
@@ -1366,7 +1229,8 @@
           m[code] = LBH.previewSimColor(bl, {
             pattern,
             colors,
-            bgColor
+            bgColor,
+            colorSlot
           }, idx);
           return;
         }
@@ -1379,7 +1243,7 @@
         m[code] = hit ? colors[idx % colors.length] : bgColor;
       });
       return m;
-    }, [section, colors, bgColor, perKeyColors, pattern, board]);
+    }, [section, colors, bgColor, colorSlot, perKeyColors, pattern, board, fwSimOn, simT, brightness, speed, direction, fullColor]);
     const selectedKey = useMemo(() => Array.from(selectedKeys)[0] || null, [selectedKeys]);
 
     /* ===== HID bridge: handlers ===== */
@@ -1521,6 +1385,36 @@
     useEffect(() => {
       if (getApi()) refreshBoards();
     }, [connected]);
+
+    // Firmware-only boards keep the colour table ON the keyboard (the vendor's
+    // Color1..Color7). Mirror it in once per connect so the picker shows the
+    // board's real slots instead of the app's default seed, and hold the
+    // lighting send until that read lands — otherwise a stale profile palette
+    // could overwrite colours the user set in the vendor app.
+    const [paletteReady, setPaletteReady] = useState(true);
+    const paletteBoardSlug = board && board.slug || null;
+    useEffect(() => {
+      if (!connected) {
+        setPaletteReady(true);
+        return;
+      }
+      const bl = board && board.lighting || null;
+      if (!bl || bl.hostEngine !== false) {
+        setPaletteReady(true);
+        return;
+      }
+      let cancelled = false;
+      setPaletteReady(false);
+      apiCall("get_lighting").then(r => {
+        if (cancelled || !r || r.ok === false || !Array.isArray(r.palette) || !r.palette.length) return;
+        setColors(r.palette.slice(0, 7).map(c => Array.isArray(c) ? rgbToHex(c) : String(c)));
+      }).catch(() => {}).finally(() => {
+        if (!cancelled) setPaletteReady(true);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [connected, paletteBoardSlug]);
 
     // The capability context value — the locked contract for the next wave
     // (shape documented in components/board-context.jsx). Also exposed to the
@@ -1677,7 +1571,12 @@
       }
       // Only show the new switch once the board took it.
       return apiCall("set_switch_codes", Array.from(selectedKeys), arg).then(r => {
-        if (r && r.ok) setSwitchId(id);else if (!(r && r.unsupported)) pushNotice(`Switch profile not written: ${r && r.error || "no reply"}`);
+        if (r && r.ok) {
+          setSwitchId(id);
+          // Switch View draws L_AXIS from the board, so re-read it after the
+          // write instead of assuming the ids landed.
+          refreshPerKeyActuation();
+        } else if (!(r && r.unsupported)) pushNotice(`Switch profile not written: ${r && r.error || "no reply"}`);
         return r;
       });
     };
@@ -1703,7 +1602,11 @@
       const pairs = (profiles || []).filter(p => p.k1 && p.k2).map(p => ({
         model: p.mode || 1,
         key1: LABEL_TO_CODE[p.k1] || p.k1,
-        key2: LABEL_TO_CODE[p.k2] || p.k2
+        key2: LABEL_TO_CODE[p.k2] || p.k2,
+        val1: LABEL_TO_CODE[p.k1v || p.k1] || p.k1v || p.k1,
+        val2: LABEL_TO_CODE[p.k2v || p.k2] || p.k2v || p.k2,
+        bind: p.bind == null ? 1 : p.bind,
+        delay: p.delay == null ? 10 : p.delay
       }));
       // No complete pair = clear: the keyboard keeps its pairs in flash, so
       // skipping the call (as before) left the old pairs active on the board.
@@ -1842,7 +1745,7 @@
     const boardSlug = board && board.slug || null;
     const lightTimer = useRef(null);
     useEffect(() => {
-      if (!connected) return;
+      if (!connected || !paletteReady) return;
       if (pattern === "custom") return; // custom effect (below) owns the engine
       clearTimeout(lightTimer.current);
       lightTimer.current = setTimeout(() => {
@@ -1859,6 +1762,7 @@
           fullColor,
           colors,
           bgColor,
+          colorSlot,
           brightness,
           speed,
           direction,
@@ -1900,7 +1804,7 @@
         }
       }, 70);
       return () => clearTimeout(lightTimer.current);
-    }, [connected, pattern, colors, bgColor, brightness, speed, power, fullColor, direction, bgBright, striOrient, lightNonce, calibrating, boardSlug]);
+    }, [connected, paletteReady, pattern, colors, bgColor, colorSlot, brightness, speed, power, fullColor, direction, bgBright, striOrient, lightNonce, calibrating, boardSlug]);
 
     // Custom mode: effect zones if any are defined (each key group runs its own
     // animated effect), otherwise static per-key colors.
@@ -1952,12 +1856,26 @@
     // the badge ("N selected"). Nothing else can race the write.
     // Read every key's stored actuation back from the firmware, normalise it to
     // {code: mm}, and stash it on JS state so the board can render per-key.
+    // The board stores one global travel value the firmware applies to keys that
+    // have no per-key override; surface it so the Travel Test render can draw the
+    // correct actuation line before any key is pressed.
+    const syncGlobalTravel = trigger => {
+      for (const detail of Object.values(trigger || {})) {
+        if (detail && Number(detail.touchMode) === 0 && Number(detail.travel_mm) > 0) {
+          window.__globalTravelMm = Number(detail.travel_mm);
+          return;
+        }
+      }
+    };
     const refreshPerKeyActuation = async () => {
       if (!connected) return;
       const r = await apiCall("verify_actuation", []);
       if (!r || r.ok === false || !r.actuation_mm) return;
       setPerKeyActuation(r.actuation_mm);
-      if (r.trigger) setPerKeyTrigger(r.trigger);
+      if (r.trigger) {
+        setPerKeyTrigger(r.trigger);
+        syncGlobalTravel(r.trigger);
+      }
     };
     // On connect, snapshot per-key actuation once so the board reflects reality
     // before the user touches anything.
@@ -1967,7 +1885,7 @@
 
     // Returns the backend result so the widget only confirms a real write.
     // The board view is then drawn from the FIRMWARE's read-back of the keys
-    // (the whole-board sweep is ~0.12 s on the WIN 60 HE), never from the
+    // (the whole-board sweep is ~0.12 s on the WIN 68 HE MAX), never from the
     // values we asked for: an "ok" from a write that went nowhere used to
     // paint numbers the keyboard never stored.
     const applyActuation = async () => {
@@ -1980,7 +1898,7 @@
         ok: false,
         error: "no keys selected"
       };
-      const mode = rtEnabled ? 13 : 0;
+      const mode = rtEnabled ? window.__rtContinuous ? 13 : 12 : 0;
       const r = await apiCall("set_trigger_codes", codes, actuation, rtEnabled ? rtPress : 0, rtEnabled ? rtRelease : 0, mode);
       if (!(r && r.ok)) {
         if (!(r && r.unsupported)) pushNotice(`Actuation not written: ${r && r.error || "no reply"}`);
@@ -2017,7 +1935,7 @@
         readback: null
       };
     };
-    const applyDeadband = async () => {
+    const applyDeadband = async (overrideTop, overrideBot) => {
       if (!connected) return {
         ok: false,
         error: "not connected"
@@ -2028,12 +1946,32 @@
         ok: false,
         error: "no keys selected"
       };
-      const r = await apiCall("set_deadband_codes", codes, deadTop, deadBottom);
-      if (!(r && r.ok) && !(r && r.unsupported)) pushNotice(`Dead band not written: ${r && r.error || "no reply"}`);
-      return r || {
-        ok: false,
-        error: "no reply"
-      };
+      const top = overrideTop != null ? Number(overrideTop) : deadTop;
+      const bot = overrideBot != null ? Number(overrideBot) : deadBottom;
+      const r = await apiCall("set_deadband_codes", codes, top, bot);
+      if (!(r && r.ok)) {
+        if (!(r && r.unsupported)) pushNotice(`Dead band not written: ${r && r.error || "no reply"}`);
+        return r || {
+          ok: false,
+          error: "no reply"
+        };
+      }
+      const v = await apiCall("verify_actuation", codes);
+      if (v && v.ok && v.actuation_mm) {
+        setPerKeyActuation(prev => ({
+          ...prev,
+          ...v.actuation_mm
+        }));
+        if (v.trigger) setPerKeyTrigger(prev => ({
+          ...prev,
+          ...v.trigger
+        }));
+        return {
+          ...r,
+          readback: v.actuation_mm
+        };
+      }
+      return r;
     };
 
     // Travel Test: stream live analog depth for ALL keys (so any keypress shows,
@@ -2127,6 +2065,13 @@
         setLightFrame(null);
         return;
       }
+      // Firmware boards have no host effect to mirror: get_light_frame is always
+      // {}, and polling it at 60 Hz still costs a bridge round trip per tick.
+      const fwOnly = !!(board && board.lighting && board.lighting.hostEngine === false);
+      if (fwOnly) {
+        setLightFrame(null);
+        return;
+      }
       let alive = true,
         inflight = false;
       const id = setInterval(() => {
@@ -2146,7 +2091,7 @@
         alive = false;
         clearInterval(id);
       };
-    }, [connected, section, MIRROR_MS]);
+    }, [connected, section, MIRROR_MS, board]);
 
     // Deepest currently-pressed key, for the switch-cutaway animation.
     const liveMax = useMemo(() => {
@@ -2332,6 +2277,8 @@
       setColors,
       bgColor,
       setBgColor,
+      colorSlot,
+      setColorSlot,
       perKeyColors,
       setPerKeyColors,
       pattern,
@@ -2425,10 +2372,6 @@
     }), BoardSubmit && /*#__PURE__*/React.createElement(BoardSubmit, {
       open: submitOpen,
       onClose: () => setSubmitOpen(false)
-    }), /*#__PURE__*/React.createElement(UpdateGate, {
-      gate: updGate,
-      onChoose: chooseAutoUpdate,
-      onDismiss: dismissUpdate
     }));
 
     // Provide the capability context for the next wave of workspaces. When the

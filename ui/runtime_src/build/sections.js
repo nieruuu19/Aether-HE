@@ -55,26 +55,64 @@
       className: "absolute left-2 right-2 -bottom-px h-px bg-[var(--accent)] shadow-[0_0_8px_var(--accent-glow)]"
     }));
   }));
+
+  /* Slider with a typeable value, ± step buttons and arrow-key nudging. The
+     range input stays the coarse control; the readout is the exact one, so a
+     value like 0.07 mm can be set without fighting a 0.05 step. */
   const Slider = ({
     label,
     value,
     min,
     max,
-    step,
+    step = 0.01,
     onChange,
     unit = "",
     color = "accent"
   }) => {
-    const pct = (value - min) / (max - min) * 100;
+    const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+    const numVal = Number(value) || 0;
+    const pct = Math.min(100, Math.max(0, (numVal - min) / (max - min) * 100));
+    const [focused, setFocused] = useState(false);
+    const [draft, setDraft] = useState(() => numVal.toFixed(decimals));
+    const inputRef = useRef(null);
+    useEffect(() => {
+      if (!focused) setDraft(numVal.toFixed(decimals));
+    }, [numVal, decimals, focused]);
+    const commitDraft = rawStr => {
+      const cleaned = String(rawStr).replace(/[^0-9.]/g, "");
+      const parsed = parseFloat(cleaned);
+      if (!Number.isNaN(parsed)) {
+        const clamped = Math.min(max, Math.max(min, parsed));
+        const factor = Math.pow(10, decimals);
+        const finalVal = Math.round(clamped * factor) / factor;
+        onChange(finalVal);
+        setDraft(finalVal.toFixed(decimals));
+      } else {
+        setDraft(numVal.toFixed(decimals));
+      }
+    };
+    const stepBy = delta => {
+      const factor = Math.pow(10, decimals);
+      const next = Math.min(max, Math.max(min, Math.round((numVal + delta) * factor) / factor));
+      onChange(next);
+      setDraft(next.toFixed(decimals));
+    };
     return /*#__PURE__*/React.createElement("div", null, label && /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between mb-2"
     }, /*#__PURE__*/React.createElement("span", {
       className: "font-display text-[12px] uppercase tracking-[0.18em] text-[var(--text-dim)]"
     }, label), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-baseline gap-1.5"
+      className: "flex items-baseline gap-1.5 cursor-text",
+      onClick: () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      },
+      title: "Click to type exact value"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[14px] text-[var(--accent)]"
-    }, Number(value).toFixed(step < 1 ? 2 : 0)), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[14px] text-[var(--accent)] hover:underline"
+    }, numVal.toFixed(decimals)), /*#__PURE__*/React.createElement("span", {
       className: "font-mono text-[10px] text-[var(--text-faint)] uppercase tracking-[0.18em]"
     }, unit))), /*#__PURE__*/React.createElement("input", {
       type: "range",
@@ -82,12 +120,68 @@
       min: min,
       max: max,
       step: step,
-      value: value,
+      value: numVal,
       style: {
         "--pct": pct + "%"
       },
       onChange: e => onChange(parseFloat(e.target.value))
-    }));
+    }), unit === "mm" && /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => stepBy(-step),
+      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] font-mono text-xs"
+    }, "\u2212"), /*#__PURE__*/React.createElement("div", {
+      className: `relative flex items-center px-2.5 h-7 rounded-md border bg-black/30 transition-all ${focused ? "border-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "border-[var(--line)] hover:border-[var(--accent)]/50"}`
+    }, /*#__PURE__*/React.createElement("input", {
+      ref: inputRef,
+      type: "text",
+      inputMode: "decimal",
+      value: focused ? draft : numVal.toFixed(decimals),
+      onFocus: e => {
+        setFocused(true);
+        setDraft(numVal.toFixed(decimals));
+        const el = e.target;
+        setTimeout(() => {
+          try {
+            el.select();
+          } catch (_) {}
+        }, 0);
+      },
+      onClick: e => e.stopPropagation(),
+      onChange: e => {
+        e.stopPropagation();
+        setDraft(e.target.value);
+      },
+      onKeyDown: e => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          commitDraft(draft);
+          e.target.blur();
+        } else if (e.key === "Escape") {
+          setDraft(numVal.toFixed(decimals));
+          setFocused(false);
+          e.target.blur();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          stepBy(step);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          stepBy(-step);
+        }
+      },
+      onBlur: () => {
+        setFocused(false);
+        commitDraft(draft);
+      },
+      className: "w-12 bg-transparent font-mono text-[12px] text-[var(--text)] text-right outline-none select-all pr-1"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[11px] text-[var(--text-faint)] select-none pointer-events-none"
+    }, unit)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => stepBy(step),
+      className: "w-7 h-7 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] font-mono text-xs"
+    }, "+")));
   };
   const ToolbarButton = ({
     children,
@@ -503,7 +597,7 @@
       className: `absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all
                                 ${travelTest ? "left-[20px] bg-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "left-0.5 bg-slate-400"}`
     }))), /*#__PURE__*/React.createElement(SwitchRender, {
-      depth: travelTest ? liveDepth : actuation,
+      depth: travelTest ? liveDepth : 0,
       actuation: actuation
     })), /*#__PURE__*/React.createElement("div", {
       className: "glass p-5"
@@ -741,48 +835,144 @@
     }, i + 1), /*#__PURE__*/React.createElement("span", null, step))))))));
   };
   const SwitchRender = ({
-    depth,
-    actuation
+    depth = 0,
+    actuation = 2.0
   }) => {
-    // Stylized magnetic switch: bottom housing, stem moves with depth
-    const stemY = Math.min(40, depth / 4 * 40); // 0..40px push-down
+    const dMap = window.__liveDepths || {};
+    const ovMap = window.__perKeyOverride || {};
+    let activeCode = null;
+    let bestRaw = 0;
+    let maxD = 0;
+    if (Number(depth) > 0) {
+      for (const [k, v] of Object.entries(dMap)) {
+        const rv = Number(v) || 0;
+        const cd = Math.floor((rv + 1e-6) * 100) / 100;
+        if (cd > maxD || cd === maxD && rv > bestRaw) {
+          maxD = cd;
+          bestRaw = rv;
+          activeCode = k;
+        }
+      }
+      if (maxD === 0) {
+        bestRaw = Number(depth) || 0;
+        maxD = Math.floor((bestRaw + 1e-6) * 100) / 100;
+      }
+    }
+    const cleanDepth = maxD;
+    const hwTriggered = Math.abs(bestRaw - cleanDepth) > 0.00004;
+    const globalMm = Number(window.__globalTravelMm) || 2.00;
+    const sliderMm = actuation != null && Number(actuation) > 0 ? Number(actuation) : globalMm;
+    const pressedKeyActMm = (() => {
+      if (!activeCode || cleanDepth <= 0.04) return null;
+      const sc = String(activeCode).replace(/^Key/, "").replace(/^Digit/, "");
+      const kc = sc.length === 1 && /[A-Za-z]/.test(sc) ? "Key" + sc.toUpperCase() : activeCode;
+      const modAliases = {
+        ShiftLeft: ["LShift", "Shift"],
+        LShift: ["ShiftLeft", "Shift"],
+        ShiftRight: ["RShift"],
+        RShift: ["ShiftRight"],
+        ControlLeft: ["LCtrl", "Ctrl"],
+        LCtrl: ["ControlLeft", "Ctrl"],
+        ControlRight: ["RCtrl"],
+        RCtrl: ["ControlRight"],
+        AltLeft: ["LAlt", "Alt"],
+        LAlt: ["AltLeft", "Alt"],
+        AltRight: ["RAlt"],
+        RAlt: ["AltRight"]
+      }[activeCode] || [];
+      let rawCfg = null;
+      for (const cand of [activeCode, kc, sc, sc.toUpperCase(), sc.toLowerCase(), ...modAliases]) {
+        if (ovMap[cand] !== undefined) {
+          rawCfg = ovMap[cand];
+          break;
+        }
+      }
+      if (rawCfg && typeof rawCfg === "object") {
+        const tm = Number(rawCfg.touchMode);
+        const hasCustom = tm === 1 || tm === 2 || rawCfg.touchMode === undefined && Number(rawCfg.actuation) > 0;
+        if (hasCustom && Number(rawCfg.actuation) > 0) return Number(rawCfg.actuation);
+        return globalMm;
+      }
+      if (typeof rawCfg === "number" && rawCfg > 0) return rawCfg;
+      return globalMm;
+    })();
+
+    // Latch the actuation line to the last physically pressed key so it does not
+    // snap back on release, while still tracking slider / global changes.
+    const yellowRef = useRef({
+      mm: sliderMm,
+      prevSlider: sliderMm,
+      prevGlobal: globalMm
+    });
+    if (Math.abs(sliderMm - yellowRef.current.prevSlider) > 0.001) {
+      yellowRef.current.prevSlider = sliderMm;
+      yellowRef.current.mm = sliderMm;
+    } else if (Math.abs(globalMm - yellowRef.current.prevGlobal) > 0.001) {
+      yellowRef.current.prevGlobal = globalMm;
+      yellowRef.current.mm = globalMm;
+    }
+    if (pressedKeyActMm != null) yellowRef.current.mm = pressedKeyActMm;
+    const keyActMm = yellowRef.current.mm || globalMm;
+    const isActuated = hwTriggered && cleanDepth > 0.04;
+    const stemY = Math.min(40, cleanDepth / 4.0 * 40);
+    const depthPct = Math.min(100, Math.max(0, cleanDepth / 4.0 * 100));
+    const actPct = Math.min(100, Math.max(0, keyActMm / 4.0 * 100));
     return /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-4"
+      className: "flex flex-col items-center gap-3 w-full"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-center gap-5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "relative w-[110px] h-[150px] flex-shrink-0"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-0 w-20 h-16 rounded-md bg-gradient-to-b from-emerald-200/20 to-emerald-300/10 border border-emerald-200/15"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-0 w-20 h-16 rounded-md transition-all duration-75 border ${isActuated ? "bg-gradient-to-b from-emerald-400/40 to-emerald-500/25 border-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.55)]" : "bg-gradient-to-b from-emerald-200/20 to-emerald-300/10 border-emerald-200/15"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-2 w-14 h-4 rounded-sm bg-slate-900/60 border border-white/10"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-2 w-14 h-4 rounded-sm border transition-colors duration-75 ${isActuated ? "bg-emerald-950/90 border-emerald-400/60" : "bg-slate-900/60 border-white/10"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 w-8 rounded-t-sm bg-slate-100/95 border border-white/30 shadow-[0_2px_6px_rgba(0,0,0,0.4)]",
+      className: `absolute left-1/2 -translate-x-1/2 w-8 rounded-t-sm border transition-colors duration-75 shadow-[0_2px_6px_rgba(0,0,0,0.4)] ${isActuated ? "bg-emerald-300 border-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.8)]" : "bg-slate-100/95 border-white/30"}`,
       style: {
         top: 18 + stemY,
         height: 60
       }
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 top-1 w-3 h-3 bg-slate-300 rounded-sm"
+      className: `absolute left-1/2 -translate-x-1/2 top-1 w-3 h-3 rounded-sm ${isActuated ? "bg-emerald-600" : "bg-slate-300"}`
     }), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-1 w-1 h-1 bg-rose-500 rounded-full"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-1 w-1.5 h-1.5 rounded-full ${isActuated ? "bg-emerald-950" : "bg-rose-500"}`
     })), /*#__PURE__*/React.createElement("div", {
-      className: "absolute left-1/2 -translate-x-1/2 bottom-6 w-12 h-12 rounded-full blur-2xl bg-[var(--accent)]/30 opacity-70"
+      className: `absolute left-1/2 -translate-x-1/2 bottom-6 w-14 h-14 rounded-full blur-2xl transition-opacity duration-75 ${isActuated ? "bg-emerald-400/60 opacity-100" : "bg-[var(--accent)]/30 opacity-70"}`
     })), /*#__PURE__*/React.createElement("div", {
-      className: "relative flex flex-col justify-between h-[150px] text-right pr-1"
+      className: "relative flex flex-col justify-between h-[150px] text-right pr-2"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "absolute -right-1 inset-y-0 w-px bg-white/10"
+      className: "absolute -right-1.5 top-[7px] bottom-[7px] w-[6px] rounded-full bg-white/[0.06] overflow-hidden border border-white/10"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-full transition-all duration-75 rounded-full ${isActuated ? "bg-emerald-400 shadow-[0_0_10px_#34d399]" : "bg-[var(--accent)]/70"}`,
+      style: {
+        height: `${depthPct}%`
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "absolute -right-2.5 w-3.5 h-[2px] bg-amber-400 shadow-[0_0_6px_#fbbf24] pointer-events-none z-10 transition-all duration-75 ease-out",
+      style: {
+        top: `calc(7px + (100% - 14px) * ${actPct / 100} - 1px)`
+      },
+      title: `Actuation Point: ${keyActMm.toFixed(2)}mm`
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `absolute -right-3 w-4 h-[3px] rounded-full pointer-events-none z-20 transition-all duration-75 ${isActuated ? "bg-emerald-300 shadow-[0_0_8px_#4ade80]" : "bg-white shadow-[0_0_4px_#fff]"}`,
+      style: {
+        top: `calc(7px + (100% - 14px) * ${depthPct / 100} - 1.5px)`
+      }
     }), [0, 1, 2, 3, 4].map(mm => /*#__PURE__*/React.createElement("div", {
       key: mm,
-      className: "flex items-center gap-2"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "font-mono text-[10px] text-[var(--text-dim)]"
-    }, mm, ".0mm"), /*#__PURE__*/React.createElement("span", {
-      className: "w-2 h-px bg-white/30"
-    }))), /*#__PURE__*/React.createElement("div", {
-      className: "absolute right-0 w-3 h-px bg-[var(--accent)] shadow-[0_0_8px_var(--accent-glow)]",
-      style: {
-        top: `${depth / 4 * 100}%`
-      }
-    })));
+      className: "relative flex items-center justify-end gap-1.5 text-[10px] font-mono text-[var(--text-faint)]"
+    }, /*#__PURE__*/React.createElement("span", null, mm.toFixed(1), "mm"), /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-px bg-white/25"
+    }))))), /*#__PURE__*/React.createElement("div", {
+      className: "w-full flex flex-col items-center gap-1 pt-1 border-t border-[var(--line)]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-full py-1 px-2.5 rounded font-mono text-[10.5px] font-bold uppercase tracking-[0.14em] text-center border transition-all duration-75 ${isActuated ? "bg-emerald-400/20 border-emerald-400 text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.35)]" : "bg-white/[0.02] border-[var(--line)] text-[var(--text-faint)]"}`
+    }, isActuated ? "● ACTUATED · KEY TRIGGERED" : "○ RELEASED · IDLE"), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between w-full px-1 text-[10px] font-mono text-[var(--text-dim)]"
+    }, /*#__PURE__*/React.createElement("span", null, "DEPTH:"), /*#__PURE__*/React.createElement("span", {
+      className: isActuated ? "text-emerald-300 font-bold" : "text-[var(--text)]"
+    }, cleanDepth.toFixed(2), " mm"))));
   };
 
   /* Selection toolbar (visible above keyboard when in actuation mode) */
@@ -1573,103 +1763,16 @@
       path: "",
       exists: false
     });
-    // Updates: current version + latest GitHub release. State machine:
-    // idle -> checking -> {uptodate | available | error}; then installing -> done.
-    const [upd, setUpd] = useState({
-      phase: "idle",
-      version: "",
-      info: null,
-      msg: ""
-    });
-    // Auto-update-on-launch preference (null = still loading / never set).
-    const [autoUpd, setAutoUpd] = useState(null);
+    // Updates are disabled in this build: opening the tab never contacts GitHub,
+    // and the card below only reports the running version.
+    const [version, setVersion] = useState("");
     useEffect(() => {
       const api = window.pywebview?.api;
       if (!api?.app_version) return;
       api.app_version().then(r => {
-        if (r?.ok) setUpd(u => ({
-          ...u,
-          version: r.version
-        }));
+        if (r?.ok) setVersion(r.version);
       }).catch(() => {});
-      // Auto-check once on open (silent on failure — it's just informational).
-      checkUpdate(true);
     }, []);
-    const checkUpdate = async silent => {
-      const api = window.pywebview?.api;
-      if (!api?.check_update) return;
-      setUpd(u => ({
-        ...u,
-        phase: "checking",
-        msg: ""
-      }));
-      try {
-        const r = await api.check_update();
-        if (!r || !r.ok) {
-          setUpd(u => ({
-            ...u,
-            phase: silent ? "idle" : "error",
-            msg: r?.error || "check failed"
-          }));
-          return;
-        }
-        if (r.update) setUpd(u => ({
-          ...u,
-          phase: "available",
-          info: r
-        }));else setUpd(u => ({
-          ...u,
-          phase: "uptodate",
-          info: r,
-          msg: r.newer ? "New version exists, but no installer for this OS." : ""
-        }));
-      } catch (e) {
-        setUpd(u => ({
-          ...u,
-          phase: silent ? "idle" : "error",
-          msg: String(e)
-        }));
-      }
-    };
-    const installUpdate = async () => {
-      const api = window.pywebview?.api;
-      if (!api?.apply_update || !upd.info) return;
-      setUpd(u => ({
-        ...u,
-        phase: "installing",
-        msg: "Downloading…"
-      }));
-      try {
-        const r = await api.apply_update(upd.info.asset_url, upd.info.asset_name);
-        if (!r || !r.ok) {
-          setUpd(u => ({
-            ...u,
-            phase: "error",
-            msg: r?.error || "install failed"
-          }));
-          return;
-        }
-        if (r.quit) setUpd(u => ({
-          ...u,
-          phase: "done",
-          msg: "Installer launched — Aether will close and reopen."
-        }));else if (r.restart) setUpd(u => ({
-          ...u,
-          phase: "done",
-          msg: "Update installed — quit and reopen Aether to apply it."
-        }));else setUpd(u => ({
-          ...u,
-          phase: "done",
-          msg: r.path ? `Downloaded to ${r.path}` : "Downloaded."
-        }));
-      } catch (e) {
-        setUpd(u => ({
-          ...u,
-          phase: "error",
-          msg: String(e)
-        }));
-      }
-    };
     useEffect(() => {
       let cancelled = false;
       const probe = () => {
@@ -1693,14 +1796,6 @@
             });
           }).catch(() => {});
         }
-        if (api.get_auto_update) {
-          api.get_auto_update().then(r => {
-            if (cancelled || !r || !r.ok) return;
-            // null (never answered) shows as ON here, matching the default the
-            // startup prompt applies; the toggle then persists an explicit value.
-            setAutoUpd(r.autoUpdate === null ? true : !!r.autoUpdate);
-          }).catch(() => {});
-        }
       };
       probe();
       const id = setInterval(probe, 800);
@@ -1721,13 +1816,6 @@
         ...s,
         enabled: !next
       }));
-    };
-    const toggleAutoUpdate = async () => {
-      const next = !autoUpd;
-      setAutoUpd(next);
-      if (!window.pywebview?.api?.set_auto_update) return;
-      const r = await window.pywebview.api.set_auto_update(next);
-      if (!(r && r.ok)) setAutoUpd(!next);
     };
     const revealSettings = async () => {
       if (window.pywebview?.api?.reveal_settings) await window.pywebview.api.reveal_settings();
@@ -1778,52 +1866,9 @@
       className: "font-display text-[12px] uppercase tracking-[0.18em] text-[var(--text)]"
     }, "Updates"), /*#__PURE__*/React.createElement("span", {
       className: "font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-faint)]"
-    }, "v", upd.version || "—")), /*#__PURE__*/React.createElement("div", {
-      className: "text-[11.5px] mt-1 min-h-[18px]"
-    }, upd.phase === "checking" && /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--text-dim)]"
-    }, "Checking for updates\u2026"), upd.phase === "uptodate" && /*#__PURE__*/React.createElement("span", {
-      className: "text-emerald-400/80"
-    }, "You're on the latest version", upd.msg ? " — " + upd.msg : "."), upd.phase === "available" && /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--accent)]"
-    }, "Update available \u2192 v", upd.info?.latest), upd.phase === "installing" && /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--text-dim)]"
-    }, upd.msg || "Installing…"), upd.phase === "done" && /*#__PURE__*/React.createElement("span", {
-      className: "text-emerald-400/80"
-    }, upd.msg), upd.phase === "error" && /*#__PURE__*/React.createElement("span", {
-      className: "text-rose-300/90"
-    }, "Update error: ", upd.msg), upd.phase === "idle" && /*#__PURE__*/React.createElement("span", {
-      className: "text-[var(--text-faint)]"
-    }, "Check for a newer release on GitHub.")), upd.phase === "available" && upd.info?.notes && /*#__PURE__*/React.createElement("pre", {
-      className: "mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] text-[var(--text-dim)] bg-[rgba(5,11,14,0.5)] rounded-md p-2 border border-[var(--line)]"
-    }, upd.info.notes), /*#__PURE__*/React.createElement("div", {
-      className: "mt-3 flex gap-2"
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => checkUpdate(false),
-      disabled: upd.phase === "checking" || upd.phase === "installing",
-      className: "px-3 h-8 rounded-md border border-[var(--line)] bg-white/[0.02] text-[var(--text)] font-display text-[10.5px] uppercase tracking-[0.16em] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] disabled:opacity-40"
-    }, "Check for updates"), upd.phase === "available" && /*#__PURE__*/React.createElement("button", {
-      onClick: installUpdate,
-      className: "px-3 h-8 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/15 text-[var(--accent)] font-display text-[10.5px] uppercase tracking-[0.16em] hover:bg-[var(--accent)]/25"
-    }, "Download & install")), /*#__PURE__*/React.createElement("div", {
-      className: "mt-4 pt-3 border-t border-[var(--line)] flex items-center justify-between gap-3"
-    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      className: "text-[12px] text-[var(--text)]"
-    }, "Auto-update on launch"), /*#__PURE__*/React.createElement("div", {
-      className: "text-[11px] text-[var(--text-dim)] mt-0.5"
-    }, "Install new releases automatically when Aether opens.")), /*#__PURE__*/React.createElement("button", {
-      onClick: toggleAutoUpdate,
-      disabled: autoUpd === null,
-      className: `relative w-12 h-6 rounded-full border transition-colors shrink-0 ml-4 disabled:opacity-40
-                          ${autoUpd ? "bg-[var(--accent)]/30 border-[var(--accent)]/60" : "bg-[rgba(5,11,14,0.5)] border-[var(--line)]"}`
-    }, /*#__PURE__*/React.createElement("span", {
-      className: `absolute top-0.5 rounded-full transition-all
-                                ${autoUpd ? "left-[26px] bg-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]" : "left-0.5 bg-[var(--text-faint)]"}`,
-      style: {
-        width: 18,
-        height: 18
-      }
-    })))), /*#__PURE__*/React.createElement("div", {
+    }, "v", version || "—")), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11.5px] mt-1 text-[var(--text-dim)]"
+    }, "Automatic update checks and downloads are disabled in this build \u2014 Aether never contacts GitHub, so it cannot download or launch an installer.")), /*#__PURE__*/React.createElement("div", {
       className: "glass p-4 lg:col-span-2"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between gap-3"

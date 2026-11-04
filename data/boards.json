@@ -32,6 +32,22 @@
       "lighting": "wip",
       "actuation": "wip",
       "status": "Bring-up — auto-detected, shares the Win60 protocol; not yet verified on hardware"
+    },
+    {
+      "slug": "aula-win60he-max",
+      "name": "Aula WIN 60 HE MAX",
+      "switches": "Hall-effect",
+      "lighting": true,
+      "actuation": true,
+      "status": "Fully supported — SparkPlay vendor protocol (0x1CA2:0x1902)"
+    },
+    {
+      "slug": "aula-win68he-max",
+      "name": "Aula WIN 68 HE MAX",
+      "switches": "Hall-effect",
+      "lighting": true,
+      "actuation": true,
+      "status": "Fully supported — SparkPlay vendor protocol (0x1CA2:0x1901)"
     }
   ],
   "recognized": [
@@ -74,16 +90,6 @@
       "slug": "aula-mini60he-max-24g",
       "name": "Aula MINI60HE / MINI68HE MAX (2.4 GHz dongle)",
       "reason": "different transport from the decoded wired boards, no capture"
-    },
-    {
-      "slug": "aula-win60he-max",
-      "name": "Aula Win60 HE Max",
-      "reason": "layout added, needs captures (#5)"
-    },
-    {
-      "slug": "aula-win68he-max",
-      "name": "Aula win68 HE Max",
-      "reason": "layout added (65%), needs captures (#7)"
     },
     {
       "slug": "aula-win60he-pro",

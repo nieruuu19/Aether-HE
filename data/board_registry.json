@@ -1,6 +1,6 @@
 {
   "_comment": "Single source of truth for which keyboards the app can identify and load. boards.py reads this to detect the connected board (by VID/PID, plus the optional 'productString' discriminator when several distinct keyboards share one VID:PID), open the right vendor interface (usage_page), load the right layout (keymap), and pick the protocol profile. Add a board here when its layout + identity land; set protocol once its packet format is decoded. VID/PID are hex strings. usage_page null -> device opener falls back to the highest interface. protocol null -> layout/identity only (lighting & actuation disabled until decoded). 'frameLen' — the board's vendor HID frame size in BYTES (omitted -> drivers default to 64, today's wired value). Drivers must size EVERY frame from this field, never hardcode: the MINI 60 HE PRO's 2.4GHz dongle speaks the same protocol at 32-byte frames (payload chunk = frameLen - 8), and a 64-byte frame sent at a 32-byte-report interface is silently truncated by hidapi and reads as 'different protocol' (that exact artifact falsified an earlier dongle probe). boards.py's frozen BoardProfile does not carry the field; drivers/mini60.frame_len_for_profile reads it from this raw JSON by slug (the hostEngineMaxFps passthrough pattern). PER-BOARD DATA BLOCKS (all optional; boards that omit them degrade to safe defaults): 'capabilities' — feature flags, each true | false | 'wip'; 'wip' means the protocol is SOURCE-ONLY (read from vendor driver source, never proven on hardware or in a capture) and the UI must not drive it. Known flags: lighting, actuation, perKeyRgb, rapidTrigger, socd, macros, calibration, gamepad, deadzone. 'lighting' — the board's OWN firmware effect table (id/byte/name + per-mode speed/color/direction rules), slider scales (brightnessMax/speedMax), offModeByte/customModeByte, hostEngine (may the host per-key effects engine stream to this board), hostEngineMaxFps (the board's measured sustainable host-stream rate in frames/second — the effects engine paces to min(its default, this) and the UI reads this ONE field on every board; passed through RAW by app_web._host_engine_max_fps because boards.py's validator whitelists lighting keys), and modeListSource: 'static' (this table is the only truth) or 'hybrid'/'firmware' (the firmware also answers a mode-list query, named in modeQuery). 'actuation' — deadzoneScope ('per-key' | 'global'; global means dead zones live in a whole-board config table and a per-key dead-zone UI CANNOT work), travel/RT/dead-zone ranges in mm, and the board's switch/axis profile list. 'productString' — string or list; USB product strings that positively identify this board among same-VID:PID siblings (at most one entry per VID:PID may omit it; that entry is the fallback match). 'offerInUi' — MAY THE UI OFFER THIS BOARD TO THE USER? An explicit boolean so the fact lives in data instead of being re-derived (differently, and wrongly) at each UI site. It gates OFFERING ONLY — board pickers, the README support table, anything that advertises a board as something you can pick and drive. It NEVER gates identification: detection, layout loading, the connected-board badge and the 'this board is recognised but not driveable yet' explanation all ignore it, because removing an entry from the registry is what would actually break Aether's ability to name the hardware in front of it. The rule the data follows (guarded by tests/test_boards.py::test_offer_in_ui_matches_evidence): offerInUi is true exactly when the board is drivable (protocol wired) AND at least one capability is proven true — a board whose every capability is false or 'wip' has nothing working to offer, so it is identified but never advertised. Omitted -> defaults to the board's `drivable` value, so legacy/test entries degrade safely. Provenance markers used in _note fields: HARDWARE-VERIFIED (round-tripped on the physical board), CONFIRMED-BY-CAPTURE (matches labeled frames from the vendor driver), SOURCE-ONLY (read from vendor driver source only — must be flagged 'wip', never true). Keep in sync with data/boards.json (the README roadmap table).",
-  "default": "aula-win60-he",
+  "default": "aula-win68he-max",
   "boards": [
     {
       "slug": "aula-win60-he",
@@ -11,7 +11,11 @@
       "formFactor": "60%",
       "_note": "CAPABILITY PROVENANCE: lighting / actuation / perKeyRgb / rapidTrigger (trigger modes 12/13) / socd (cmd 36 PRCS) / deadzone per-key (cmd 38) / calibration (cmd 33 revise) / gamepad (board cmd 20 sub 3 + host virtual pad) are all HARDWARE-VERIFIED — these are the app's original working paths (CLAUDE.md cheat-sheet, app_web.py). macros = TRUE, CONFIRMED-BY-CAPTURE (webhid-capture-win60.json, WIN60_CAPTURE_NOTES.md section 5): the cmd 0x19 slot format (10 x 256 B, 8-byte header [slot, playMode, lenBE16, countBE16, 0, 0] + 4-byte events [hid, 0x10 down/0x00 up, delayAfterBE16]) is reproduced byte-for-byte by protocol.build_macro_packets against two captured macros (6 and 14 events, including an event split across the 58-byte chunk boundary), the read-back framing (5 chunks, [1] = slot|0x80, all-0xFF when never written) is pinned by tests, and the key binding is the keymap entry [0x10, hid, slot, 0] seen on the wire (slot 96 `10 10 00 00`, slot 95 `10 11 01 00`) written by Win60Driver.bind_macro as a read-modify-write of the base layer. Header byte 1 is the vendor's macroType (deobfuscated.js getMacroType/setMacroValue L1235): only 0 (once) and 1 (N times) were exercised; 2 (toggle) / 3 (hold) and mouse-button events are SOURCE-ONLY and not offered as verified. Not yet round-tripped by Aether's own frames on a physical board — first on-hardware check: save a 2-event macro to slot 0, bind it to a key, press it, read it back. PRODUCT-STRING COLLISION: FIVE different keyboards ship with 2E3C:C365 (WIN 60 HE x2 switch kits, WIN 68 HE x2 kits, KP-TE153), disambiguated ONLY by USB product string — vendor list in docs/context/hed-aulacn-raw/driver_src/config__device.json (SOURCE-ONLY): SI2825HEARGB / SI2825KZHEARGB = this 60% board; SI2828HEARGB / SI2828KZHEARGB = WIN 68 HE; SI2851UKKZHEARGB = KP-TE153. This entry claims the two SI2825 strings and stays the FALLBACK when the product string is absent or matches nothing, so detection behaviour is unchanged for existing users. The WIN 68 HE / KP-TE153 siblings now have their own discriminated entries (aula-win68-he, aula-kp-te153) with the vendor's own per-product layouts.",
       "_productStringNote": "HARDWARE-VERIFIED 2026-07-20: this board's real USB product string is 'WIN 60 HE' (read from hid.enumerate() on the physical device). The SI2825* values are the vendor's INTERNAL MODEL CODES from hed.aulacn.com's config/device.json — they were originally declared here on the assumption that device.json's 'product' field was the USB product string. It is NOT. They are kept only as documentation of the model↔board mapping and will never match a real device. Any sibling's SI28xx string below is likewise a model code, not a USB string, and its real USB string is UNVERIFIED (a WIN 68 HE most plausibly reports 'WIN 68 HE' by analogy, but nobody has read one). Unmatched strings fall back to this entry, which is the pre-existing behaviour, so an unrecognised C365 board is no worse off than before.",
-      "productString": ["WIN 60 HE", "SI2825HEARGB", "SI2825KZHEARGB"],
+      "productString": [
+        "WIN 60 HE",
+        "SI2825HEARGB",
+        "SI2825KZHEARGB"
+      ],
       "usage_page": "0xFF1B",
       "keymap": "ui/keymap.json",
       "protocol": "protocol",
@@ -33,40 +37,201 @@
         "brightnessMin": 0,
         "speedMin": 0,
         "modeListSource": "hybrid",
-        "modeQuery": { "module": "protocol", "build": "build_read_light_list", "parse": "parse_light_list" },
+        "modeQuery": {
+          "module": "protocol",
+          "build": "build_read_light_list",
+          "parse": "parse_light_list"
+        },
         "customModeByte": 10,
         "hostEngine": true,
         "hostEngineMaxFps": 60,
         "modes": [
-          { "id": "static",    "name": "Static",        "byte": 0,  "speed": false },
-          { "id": "breath",    "name": "Breath",        "byte": 1,  "bg": true, "fullColor": true },
-          { "id": "wave",      "name": "Wave",          "byte": 2,  "bg": true, "fullColor": true, "direction": "all" },
-          { "id": "neon",      "name": "Neon",          "byte": 3,  "bg": true, "fullColor": true },
-          { "id": "radar",     "name": "Radar",         "byte": 4,  "bg": true, "fullColor": true, "direction": "rotate" },
-          { "id": "reactive",  "name": "Reactive",      "byte": 6,  "bg": true, "fullColor": true },
-          { "id": "aurora",    "name": "Aurora",        "byte": 7,  "bg": true, "fullColor": true, "direction": "gather" },
-          { "id": "ripple",    "name": "Ripple",        "byte": 8,  "bg": true, "fullColor": true },
-          { "id": "twinkle",   "name": "Twinkle",       "byte": 9,  "bg": true, "fullColor": true },
-          { "id": "custom",    "name": "Custom",        "byte": 10, "speed": false },
-          { "id": "cross",     "name": "Cross",         "byte": 11, "bg": true, "fullColor": true },
-          { "id": "frenzy",    "name": "Frenzy",        "byte": 16, "bg": true, "fullColor": true },
-          { "id": "speedres",  "name": "Speed Respond", "byte": 12, "speed": false, "bg": true, "fullColor": true, "direction": "ud" },
-          { "id": "autorip",   "name": "Auto Ripple",   "byte": 14, "bg": true, "fullColor": true },
-          { "id": "striation", "name": "Striation",     "byte": 15, "bg": true, "fullColor": true, "direction": "lr" },
-          { "id": "fireworks", "name": "Fireworks",     "byte": 16, "bg": true, "fullColor": true }
+          {
+            "id": "static",
+            "name": "Static",
+            "byte": 0,
+            "speed": false
+          },
+          {
+            "id": "breath",
+            "name": "Breath",
+            "byte": 1,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "wave",
+            "name": "Wave",
+            "byte": 2,
+            "bg": true,
+            "fullColor": true,
+            "direction": "all"
+          },
+          {
+            "id": "neon",
+            "name": "Neon",
+            "byte": 3,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "radar",
+            "name": "Radar",
+            "byte": 4,
+            "bg": true,
+            "fullColor": true,
+            "direction": "rotate"
+          },
+          {
+            "id": "reactive",
+            "name": "Reactive",
+            "byte": 6,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "aurora",
+            "name": "Aurora",
+            "byte": 7,
+            "bg": true,
+            "fullColor": true,
+            "direction": "gather"
+          },
+          {
+            "id": "ripple",
+            "name": "Ripple",
+            "byte": 8,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "twinkle",
+            "name": "Twinkle",
+            "byte": 9,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "custom",
+            "name": "Custom",
+            "byte": 10,
+            "speed": false
+          },
+          {
+            "id": "cross",
+            "name": "Cross",
+            "byte": 11,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "frenzy",
+            "name": "Frenzy",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "speedres",
+            "name": "Speed Respond",
+            "byte": 12,
+            "speed": false,
+            "bg": true,
+            "fullColor": true,
+            "direction": "ud"
+          },
+          {
+            "id": "autorip",
+            "name": "Auto Ripple",
+            "byte": 14,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "striation",
+            "name": "Striation",
+            "byte": 15,
+            "bg": true,
+            "fullColor": true,
+            "direction": "lr"
+          },
+          {
+            "id": "fireworks",
+            "name": "Fireworks",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          }
         ]
       },
       "actuation": {
         "_note": "HARDWARE-VERIFIED (cmd 33): units 0.01 mm; ranges as exposed by the current UI (actuation.jsx) — firmware minimum travel is 0.08 mm per CLAUDE.md, UI uses 0.1. deadzoneScope 'per-key': cmd 38 writes per-key dead bands. Switch profiles feed cmd 37; ids/codes moved verbatim from actuation.jsx SWITCHES + app.jsx handlePickSwitch (hm1=1 hh1=2 cy1=3 tc1=5).",
         "deadzoneScope": "per-key",
-        "travelRange": [0.1, 3.4],
-        "rtRange": [0.05, 2.0],
-        "deadzoneRange": [0.0, 0.5],
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.05,
+          2.0
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
         "switches": [
-          { "id": "hm1", "code": 1, "name": "HM1", "sub": "Magnetic Switch", "dot": "#3b82f6", "maker": "Gateron", "travel": "4.0 mm", "force": "30 gf", "range": "0.1 - 4.0 mm", "poles": "Single", "life": "100 M" },
-          { "id": "hh1", "code": 2, "name": "HH1", "sub": "Magnetic Switch", "dot": "#a3a300", "maker": "Gateron", "travel": "3.5 mm", "force": "40 gf", "range": "0.1 - 3.5 mm", "poles": "Single", "life": "100 M" },
-          { "id": "cy1", "code": 3, "name": "CY1", "sub": "Magnetic Switch", "dot": "#cbd5e1", "maker": "KZZI", "travel": "3.4 mm", "force": "35 gf", "range": "0.1 - 3.4 mm", "poles": "Single", "life": "80 M" },
-          { "id": "tc1", "code": 5, "name": "TC1", "sub": "TTC Kom", "dot": "#c026d3", "maker": "TTC", "travel": "3.6 mm", "force": "45 gf", "range": "0.2 - 3.6 mm", "poles": "Dual", "life": "100 M" }
+          {
+            "id": "hm1",
+            "code": 1,
+            "name": "HM1",
+            "sub": "Magnetic Switch",
+            "dot": "#3b82f6",
+            "maker": "Gateron",
+            "travel": "4.0 mm",
+            "force": "30 gf",
+            "range": "0.1 - 4.0 mm",
+            "poles": "Single",
+            "life": "100 M"
+          },
+          {
+            "id": "hh1",
+            "code": 2,
+            "name": "HH1",
+            "sub": "Magnetic Switch",
+            "dot": "#a3a300",
+            "maker": "Gateron",
+            "travel": "3.5 mm",
+            "force": "40 gf",
+            "range": "0.1 - 3.5 mm",
+            "poles": "Single",
+            "life": "100 M"
+          },
+          {
+            "id": "cy1",
+            "code": 3,
+            "name": "CY1",
+            "sub": "Magnetic Switch",
+            "dot": "#cbd5e1",
+            "maker": "KZZI",
+            "travel": "3.4 mm",
+            "force": "35 gf",
+            "range": "0.1 - 3.4 mm",
+            "poles": "Single",
+            "life": "80 M"
+          },
+          {
+            "id": "tc1",
+            "code": 5,
+            "name": "TC1",
+            "sub": "TTC Kom",
+            "dot": "#c026d3",
+            "maker": "TTC",
+            "travel": "3.6 mm",
+            "force": "45 gf",
+            "range": "0.2 - 3.6 mm",
+            "poles": "Dual",
+            "life": "100 M"
+          }
         ]
       },
       "status": "supported",
@@ -81,7 +246,11 @@
       "formFactor": "65%",
       "_note": "DISCRIMINATED SIBLING of aula-win60-he: same USB identity 2E3C:C365, identified only by product string. SI2828HEARGB / SI2828KZHEARGB are the two switch-kit variants of the same board; the vendor's key tables for them are byte-identical, so both strings share one layout file. DRIVABILITY DECISION 2026-07-20, from an audit of the vendor driver (docs/context/hed-aulacn-raw/driver_deobf/): protocol 'protocol' because the hed driver serves all five 2E3C:C365 products through ONE protocol code path with ZERO product-string branching at protocol level. Evidence: (a) agreement.deobf.js (the entire packet layer) references curDevice.product exactly once, as a localStorage cache key (line 185); (b) every full-table write is a FIXED-SIZE full-matrix constant, identical for all five products and never sized from key count — keymap 0x210 (132x4, setKeyValue), per-key RGB 0x18C (132x3, setCustomLight), switch table 0x84 (setKeySwitch), dead-band 0x108 (132x2, setDeadBand), trigger select = 22-column bitmask with row bits (setAnyTriggerValue) — so 61 vs 68 keys changes WHICH slots are populated (layout-driven), not framing or sizes; (c) all index math is the same hardcoded 6x22 matrix (row=idx//22, col=idx%22) everywhere; (d) maxTriggerTravel, triggerUnit (raw/100, or raw/1000 when the isHighPrecision bit is set) and the optional-feature set (isDeadBand/isGamePad/isRS/isRKRT bits in the info report, agreement.deobf.js line 31) are NEGOTIATED FROM THE DEVICE at connect, never assumed per product; (e) the per-product quirks that do exist are UI-layer only (KGA75HEARGB DKS route defaults, YC75HEARGB tab skip, 7575US/QK75C fixed-key filters) — none touches command bytes and none applies to this board. This is NOT the shared-VID fallacy: every falsified 'same protocol' inference (80A1 vs 80A2, the FEFE/FEFC dongles, the 38A6 family, the 80B2 alt PID) crossed a DIFFERENT USB identity; here the identity is bit-identical, Aether cannot even distinguish the boards at the transport layer, and the shipping vendor driver drives this exact board through the captured code path in production. CAPABILITY PROVENANCE: the frames are HARDWARE-VERIFIED / CONFIRMED-BY-CAPTURE via aula-win60-he through this same code path; their applicability to THIS model is SOURCE-ONLY (the invariance audit above) — no WIN 68 has ever been round-tripped by Aether. lighting / actuation / perKeyRgb / rapidTrigger / socd / calibration = true on that shared-identity evidence. deadzone and gamepad = 'wip' because the vendor driver gates them on firmware FEATURE BITS never read from a WIN 68 — do not drive them until the info-report bits are confirmed. Key indices come from the vendor's own per-product table (driver_src/config__keys__SI2828HEARGB.json) — the same source that reproduced the hardware-verified Win60 map exactly — and they DIFFER from the 60% board (R-Shift 101 here vs 100 there). That difference is why this entry must exist: before it, a WIN 68 owner fell back to aula-win60-he and was driven with the WRONG 60% indices. BRING-UP CHECKS on first hardware contact: read max travel (cmd 33 sub 4) to confirm triggerUnit = 0.01 mm (a high-precision firmware would scale actuation values 10x), read the feature bits, and travel-test the non-60% keys to confirm their indices.",
       "_productStringNote": "ASSUMED, NOT VERIFIED: 'WIN 68 HE' is an analogy from the Win60, whose real USB product string was read from hardware as 'WIN 60 HE' (the SI2828* values are vendor model codes from device.json, not USB strings — see the win60 entry). If a real WIN 68 HE reports something else it falls back to the win60 entry and gets the 60% keymap, i.e. exactly today's behaviour — no regression, but the discriminator simply won't fire until someone reads a real one.",
-      "productString": ["WIN 68 HE", "SI2828HEARGB", "SI2828KZHEARGB"],
+      "productString": [
+        "WIN 68 HE",
+        "SI2828HEARGB",
+        "SI2828KZHEARGB"
+      ],
       "usage_page": "0xFF1B",
       "keymap": "ui/layouts/aula-win68he-si2828heargb.json",
       "protocol": "protocol",
@@ -103,34 +272,147 @@
         "brightnessMin": 0,
         "speedMin": 0,
         "modeListSource": "hybrid",
-        "modeQuery": { "module": "protocol", "build": "build_read_light_list", "parse": "parse_light_list" },
+        "modeQuery": {
+          "module": "protocol",
+          "build": "build_read_light_list",
+          "parse": "parse_light_list"
+        },
         "customModeByte": 10,
         "hostEngine": true,
         "modes": [
-          { "id": "static",    "name": "Static",        "byte": 0,  "speed": false },
-          { "id": "breath",    "name": "Breath",        "byte": 1,  "bg": true, "fullColor": true },
-          { "id": "wave",      "name": "Wave",          "byte": 2,  "bg": true, "fullColor": true, "direction": "all" },
-          { "id": "neon",      "name": "Neon",          "byte": 3,  "bg": true, "fullColor": true },
-          { "id": "radar",     "name": "Radar",         "byte": 4,  "bg": true, "fullColor": true, "direction": "rotate" },
-          { "id": "reactive",  "name": "Reactive",      "byte": 6,  "bg": true, "fullColor": true },
-          { "id": "aurora",    "name": "Aurora",        "byte": 7,  "bg": true, "fullColor": true, "direction": "gather" },
-          { "id": "ripple",    "name": "Ripple",        "byte": 8,  "bg": true, "fullColor": true },
-          { "id": "twinkle",   "name": "Twinkle",       "byte": 9,  "bg": true, "fullColor": true },
-          { "id": "custom",    "name": "Custom",        "byte": 10, "speed": false },
-          { "id": "cross",     "name": "Cross",         "byte": 11, "bg": true, "fullColor": true },
-          { "id": "frenzy",    "name": "Frenzy",        "byte": 16, "bg": true, "fullColor": true },
-          { "id": "speedres",  "name": "Speed Respond", "byte": 12, "speed": false, "bg": true, "fullColor": true, "direction": "ud" },
-          { "id": "autorip",   "name": "Auto Ripple",   "byte": 14, "bg": true, "fullColor": true },
-          { "id": "striation", "name": "Striation",     "byte": 15, "bg": true, "fullColor": true, "direction": "lr" },
-          { "id": "fireworks", "name": "Fireworks",     "byte": 16, "bg": true, "fullColor": true }
+          {
+            "id": "static",
+            "name": "Static",
+            "byte": 0,
+            "speed": false
+          },
+          {
+            "id": "breath",
+            "name": "Breath",
+            "byte": 1,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "wave",
+            "name": "Wave",
+            "byte": 2,
+            "bg": true,
+            "fullColor": true,
+            "direction": "all"
+          },
+          {
+            "id": "neon",
+            "name": "Neon",
+            "byte": 3,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "radar",
+            "name": "Radar",
+            "byte": 4,
+            "bg": true,
+            "fullColor": true,
+            "direction": "rotate"
+          },
+          {
+            "id": "reactive",
+            "name": "Reactive",
+            "byte": 6,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "aurora",
+            "name": "Aurora",
+            "byte": 7,
+            "bg": true,
+            "fullColor": true,
+            "direction": "gather"
+          },
+          {
+            "id": "ripple",
+            "name": "Ripple",
+            "byte": 8,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "twinkle",
+            "name": "Twinkle",
+            "byte": 9,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "custom",
+            "name": "Custom",
+            "byte": 10,
+            "speed": false
+          },
+          {
+            "id": "cross",
+            "name": "Cross",
+            "byte": 11,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "frenzy",
+            "name": "Frenzy",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "speedres",
+            "name": "Speed Respond",
+            "byte": 12,
+            "speed": false,
+            "bg": true,
+            "fullColor": true,
+            "direction": "ud"
+          },
+          {
+            "id": "autorip",
+            "name": "Auto Ripple",
+            "byte": 14,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "striation",
+            "name": "Striation",
+            "byte": 15,
+            "bg": true,
+            "fullColor": true,
+            "direction": "lr"
+          },
+          {
+            "id": "fireworks",
+            "name": "Fireworks",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          }
         ]
       },
       "actuation": {
         "_note": "Ranges mirror the Win60 UI ranges (units 0.01 mm) — but triggerUnit and max travel are DEVICE-NEGOTIATED in the vendor driver (readMaxTriggerTravel + isHighPrecision bit), so confirm them from the board at bring-up before trusting the scale. deadzoneScope 'per-key' is a protocol-family fact (cmd 38 writes a per-key 132x2 table), but the deadzone CAPABILITY itself is 'wip' pending the isDeadBand firmware bit. switches []: this board's switch kits (SI2828 HE vs KZ) were never enumerated — the firmware answers the switch list itself (cmd 37 sub 0), so leave empty until read back.",
         "deadzoneScope": "per-key",
-        "travelRange": [0.1, 3.4],
-        "rtRange": [0.05, 2.0],
-        "deadzoneRange": [0.0, 0.5],
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.05,
+          2.0
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
         "switches": []
       },
       "status": "bringup",
@@ -167,34 +449,147 @@
         "brightnessMin": 0,
         "speedMin": 0,
         "modeListSource": "hybrid",
-        "modeQuery": { "module": "protocol", "build": "build_read_light_list", "parse": "parse_light_list" },
+        "modeQuery": {
+          "module": "protocol",
+          "build": "build_read_light_list",
+          "parse": "parse_light_list"
+        },
         "customModeByte": 10,
         "hostEngine": true,
         "modes": [
-          { "id": "static",    "name": "Static",        "byte": 0,  "speed": false },
-          { "id": "breath",    "name": "Breath",        "byte": 1,  "bg": true, "fullColor": true },
-          { "id": "wave",      "name": "Wave",          "byte": 2,  "bg": true, "fullColor": true, "direction": "all" },
-          { "id": "neon",      "name": "Neon",          "byte": 3,  "bg": true, "fullColor": true },
-          { "id": "radar",     "name": "Radar",         "byte": 4,  "bg": true, "fullColor": true, "direction": "rotate" },
-          { "id": "reactive",  "name": "Reactive",      "byte": 6,  "bg": true, "fullColor": true },
-          { "id": "aurora",    "name": "Aurora",        "byte": 7,  "bg": true, "fullColor": true, "direction": "gather" },
-          { "id": "ripple",    "name": "Ripple",        "byte": 8,  "bg": true, "fullColor": true },
-          { "id": "twinkle",   "name": "Twinkle",       "byte": 9,  "bg": true, "fullColor": true },
-          { "id": "custom",    "name": "Custom",        "byte": 10, "speed": false },
-          { "id": "cross",     "name": "Cross",         "byte": 11, "bg": true, "fullColor": true },
-          { "id": "frenzy",    "name": "Frenzy",        "byte": 16, "bg": true, "fullColor": true },
-          { "id": "speedres",  "name": "Speed Respond", "byte": 12, "speed": false, "bg": true, "fullColor": true, "direction": "ud" },
-          { "id": "autorip",   "name": "Auto Ripple",   "byte": 14, "bg": true, "fullColor": true },
-          { "id": "striation", "name": "Striation",     "byte": 15, "bg": true, "fullColor": true, "direction": "lr" },
-          { "id": "fireworks", "name": "Fireworks",     "byte": 16, "bg": true, "fullColor": true }
+          {
+            "id": "static",
+            "name": "Static",
+            "byte": 0,
+            "speed": false
+          },
+          {
+            "id": "breath",
+            "name": "Breath",
+            "byte": 1,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "wave",
+            "name": "Wave",
+            "byte": 2,
+            "bg": true,
+            "fullColor": true,
+            "direction": "all"
+          },
+          {
+            "id": "neon",
+            "name": "Neon",
+            "byte": 3,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "radar",
+            "name": "Radar",
+            "byte": 4,
+            "bg": true,
+            "fullColor": true,
+            "direction": "rotate"
+          },
+          {
+            "id": "reactive",
+            "name": "Reactive",
+            "byte": 6,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "aurora",
+            "name": "Aurora",
+            "byte": 7,
+            "bg": true,
+            "fullColor": true,
+            "direction": "gather"
+          },
+          {
+            "id": "ripple",
+            "name": "Ripple",
+            "byte": 8,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "twinkle",
+            "name": "Twinkle",
+            "byte": 9,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "custom",
+            "name": "Custom",
+            "byte": 10,
+            "speed": false
+          },
+          {
+            "id": "cross",
+            "name": "Cross",
+            "byte": 11,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "frenzy",
+            "name": "Frenzy",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "speedres",
+            "name": "Speed Respond",
+            "byte": 12,
+            "speed": false,
+            "bg": true,
+            "fullColor": true,
+            "direction": "ud"
+          },
+          {
+            "id": "autorip",
+            "name": "Auto Ripple",
+            "byte": 14,
+            "bg": true,
+            "fullColor": true
+          },
+          {
+            "id": "striation",
+            "name": "Striation",
+            "byte": 15,
+            "bg": true,
+            "fullColor": true,
+            "direction": "lr"
+          },
+          {
+            "id": "fireworks",
+            "name": "Fireworks",
+            "byte": 16,
+            "bg": true,
+            "fullColor": true
+          }
         ]
       },
       "actuation": {
         "_note": "Ranges mirror the Win60 UI ranges (units 0.01 mm); triggerUnit and max travel are DEVICE-NEGOTIATED in the vendor driver — confirm from the board at bring-up. deadzoneScope 'per-key' is a protocol-family fact (cmd 38, 132x2 table); the deadzone capability stays 'wip' pending the isDeadBand firmware bit. switches []: kit never enumerated — the firmware answers the switch list (cmd 37 sub 0).",
         "deadzoneScope": "per-key",
-        "travelRange": [0.1, 3.4],
-        "rtRange": [0.05, 2.0],
-        "deadzoneRange": [0.0, 0.5],
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.05,
+          2.0
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
         "switches": []
       },
       "status": "bringup",
@@ -210,9 +605,16 @@
       "usage_page": "0xFF68",
       "keymap": "ui/layouts/aula-mini60he-max.json",
       "protocol": "protocol_sonix",
-      "capabilities": { "lighting": "wip", "actuation": "wip", "perKeyRgb": false },
+      "capabilities": {
+        "lighting": "wip",
+        "actuation": "wip",
+        "perKeyRgb": false
+      },
       "status": "bringup",
-      "issues": [1, 4]
+      "issues": [
+        1,
+        4
+      ]
     },
     {
       "slug": "aula-mini60he-pro",
@@ -253,38 +655,142 @@
         "hostEngine": true,
         "hostEngineMaxFps": 28,
         "modes": [
-          { "id": "static",            "name": "Static",            "byte": 1,  "speed": false },
-          { "id": "reactive-single",   "name": "Reactive Single",   "byte": 2 },
-          { "id": "extinguish-single", "name": "Extinguish Single", "byte": 3 },
-          { "id": "starry-sky",        "name": "Starry Sky",        "byte": 4 },
-          { "id": "snowfall",          "name": "Snowfall",          "byte": 5 },
-          { "id": "blossoming",        "name": "Blossoming",        "byte": 6,  "color": false },
-          { "id": "dynamic-breathing", "name": "Dynamic Breathing", "byte": 7 },
-          { "id": "spectrum-cycle",    "name": "Spectrum Cycle",    "byte": 8,  "color": false },
-          { "id": "color-spring",      "name": "Color Spring",      "byte": 9 },
-          { "id": "colorful-cross",    "name": "Colorful Cross",    "byte": 10, "direction": true },
-          { "id": "drifting",          "name": "Drifting",          "byte": 11, "direction": true },
-          { "id": "twisting-path",     "name": "Twisting Path",     "byte": 12, "direction": true },
-          { "id": "reactive",          "name": "Reactive",          "byte": 13 },
-          { "id": "double-tap",        "name": "Double Tap",        "byte": 14 },
-          { "id": "ripple-spread",     "name": "Ripple Spread",     "byte": 15, "color": false },
-          { "id": "flowing",           "name": "Flowing",           "byte": 16, "direction": true },
-          { "id": "mountain-peaks",    "name": "Mountain Peaks",    "byte": 17, "color": false },
-          { "id": "gentle-rain",       "name": "Gentle Rain",       "byte": 18, "direction": true, "color": false },
-          { "id": "shuttle",           "name": "Shuttle",           "byte": 19, "color": false },
-          { "id": "custom",            "name": "Custom (per-key)",  "byte": 20, "speed": false }
+          {
+            "id": "static",
+            "name": "Static",
+            "byte": 1,
+            "speed": false
+          },
+          {
+            "id": "reactive-single",
+            "name": "Reactive Single",
+            "byte": 2
+          },
+          {
+            "id": "extinguish-single",
+            "name": "Extinguish Single",
+            "byte": 3
+          },
+          {
+            "id": "starry-sky",
+            "name": "Starry Sky",
+            "byte": 4
+          },
+          {
+            "id": "snowfall",
+            "name": "Snowfall",
+            "byte": 5
+          },
+          {
+            "id": "blossoming",
+            "name": "Blossoming",
+            "byte": 6,
+            "color": false
+          },
+          {
+            "id": "dynamic-breathing",
+            "name": "Dynamic Breathing",
+            "byte": 7
+          },
+          {
+            "id": "spectrum-cycle",
+            "name": "Spectrum Cycle",
+            "byte": 8,
+            "color": false
+          },
+          {
+            "id": "color-spring",
+            "name": "Color Spring",
+            "byte": 9
+          },
+          {
+            "id": "colorful-cross",
+            "name": "Colorful Cross",
+            "byte": 10,
+            "direction": true
+          },
+          {
+            "id": "drifting",
+            "name": "Drifting",
+            "byte": 11,
+            "direction": true
+          },
+          {
+            "id": "twisting-path",
+            "name": "Twisting Path",
+            "byte": 12,
+            "direction": true
+          },
+          {
+            "id": "reactive",
+            "name": "Reactive",
+            "byte": 13
+          },
+          {
+            "id": "double-tap",
+            "name": "Double Tap",
+            "byte": 14
+          },
+          {
+            "id": "ripple-spread",
+            "name": "Ripple Spread",
+            "byte": 15,
+            "color": false
+          },
+          {
+            "id": "flowing",
+            "name": "Flowing",
+            "byte": 16,
+            "direction": true
+          },
+          {
+            "id": "mountain-peaks",
+            "name": "Mountain Peaks",
+            "byte": 17,
+            "color": false
+          },
+          {
+            "id": "gentle-rain",
+            "name": "Gentle Rain",
+            "byte": 18,
+            "direction": true,
+            "color": false
+          },
+          {
+            "id": "shuttle",
+            "name": "Shuttle",
+            "byte": 19,
+            "color": false
+          },
+          {
+            "id": "custom",
+            "name": "Custom (per-key)",
+            "byte": 20,
+            "speed": false
+          }
         ]
       },
       "actuation": {
         "_note": "Record layout CONFIRMED-BY-CAPTURE + hardware round-trip (write 0x27 / read 0x17: 126 records x 8 bytes, trip/RT LE16 in 0.01 mm). Ranges SOURCE-ONLY from vendor Trigger_Data (driver_src/trigger-t6lqQxHu.js): travel 0.1..3.4 step 0.01 (max capped by the active axis's maxTravel), RT 0.01..3.4, dead zone 0..0.5. deadzoneScope 'global': dead zones live at payload[8]/[9] of the 0x11/0x21 game-mode table (topDeadZone position CONFIRMED-BY-CAPTURE) — they are whole-board values, NOT per-key; a per-key dead-zone UI cannot work on this hardware. switches []: the 0x27 record has a per-key axisType byte, but this board's axis ids live in the vendor hub's device config (axisMap, driver_src/HFD-D07mGRx8.js) and were never captured — ASSUMED until read back from hardware, so no axis list is declared yet.",
         "deadzoneScope": "global",
-        "travelRange": [0.1, 3.4],
-        "rtRange": [0.01, 3.4],
-        "deadzoneRange": [0.0, 0.5],
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.01,
+          3.4
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
         "switches": []
       },
       "status": "supported",
-      "issues": [6]
+      "issues": [
+        6
+      ]
     },
     {
       "slug": "aula-mini60he-pro-24g",
@@ -325,39 +831,143 @@
         "customModeByte": 20,
         "hostEngine": false,
         "modes": [
-          { "id": "static",            "name": "Static",            "byte": 1,  "speed": false },
-          { "id": "reactive-single",   "name": "Reactive Single",   "byte": 2 },
-          { "id": "extinguish-single", "name": "Extinguish Single", "byte": 3 },
-          { "id": "starry-sky",        "name": "Starry Sky",        "byte": 4 },
-          { "id": "snowfall",          "name": "Snowfall",          "byte": 5 },
-          { "id": "blossoming",        "name": "Blossoming",        "byte": 6,  "color": false },
-          { "id": "dynamic-breathing", "name": "Dynamic Breathing", "byte": 7 },
-          { "id": "spectrum-cycle",    "name": "Spectrum Cycle",    "byte": 8,  "color": false },
-          { "id": "color-spring",      "name": "Color Spring",      "byte": 9 },
-          { "id": "colorful-cross",    "name": "Colorful Cross",    "byte": 10, "direction": true },
-          { "id": "drifting",          "name": "Drifting",          "byte": 11, "direction": true },
-          { "id": "twisting-path",     "name": "Twisting Path",     "byte": 12, "direction": true },
-          { "id": "reactive",          "name": "Reactive",          "byte": 13 },
-          { "id": "double-tap",        "name": "Double Tap",        "byte": 14 },
-          { "id": "ripple-spread",     "name": "Ripple Spread",     "byte": 15, "color": false },
-          { "id": "flowing",           "name": "Flowing",           "byte": 16, "direction": true },
-          { "id": "mountain-peaks",    "name": "Mountain Peaks",    "byte": 17, "color": false },
-          { "id": "gentle-rain",       "name": "Gentle Rain",       "byte": 18, "direction": true, "color": false },
-          { "id": "shuttle",           "name": "Shuttle",           "byte": 19, "color": false },
-          { "id": "custom",            "name": "Custom (per-key)",  "byte": 20, "speed": false }
+          {
+            "id": "static",
+            "name": "Static",
+            "byte": 1,
+            "speed": false
+          },
+          {
+            "id": "reactive-single",
+            "name": "Reactive Single",
+            "byte": 2
+          },
+          {
+            "id": "extinguish-single",
+            "name": "Extinguish Single",
+            "byte": 3
+          },
+          {
+            "id": "starry-sky",
+            "name": "Starry Sky",
+            "byte": 4
+          },
+          {
+            "id": "snowfall",
+            "name": "Snowfall",
+            "byte": 5
+          },
+          {
+            "id": "blossoming",
+            "name": "Blossoming",
+            "byte": 6,
+            "color": false
+          },
+          {
+            "id": "dynamic-breathing",
+            "name": "Dynamic Breathing",
+            "byte": 7
+          },
+          {
+            "id": "spectrum-cycle",
+            "name": "Spectrum Cycle",
+            "byte": 8,
+            "color": false
+          },
+          {
+            "id": "color-spring",
+            "name": "Color Spring",
+            "byte": 9
+          },
+          {
+            "id": "colorful-cross",
+            "name": "Colorful Cross",
+            "byte": 10,
+            "direction": true
+          },
+          {
+            "id": "drifting",
+            "name": "Drifting",
+            "byte": 11,
+            "direction": true
+          },
+          {
+            "id": "twisting-path",
+            "name": "Twisting Path",
+            "byte": 12,
+            "direction": true
+          },
+          {
+            "id": "reactive",
+            "name": "Reactive",
+            "byte": 13
+          },
+          {
+            "id": "double-tap",
+            "name": "Double Tap",
+            "byte": 14
+          },
+          {
+            "id": "ripple-spread",
+            "name": "Ripple Spread",
+            "byte": 15,
+            "color": false
+          },
+          {
+            "id": "flowing",
+            "name": "Flowing",
+            "byte": 16,
+            "direction": true
+          },
+          {
+            "id": "mountain-peaks",
+            "name": "Mountain Peaks",
+            "byte": 17,
+            "color": false
+          },
+          {
+            "id": "gentle-rain",
+            "name": "Gentle Rain",
+            "byte": 18,
+            "direction": true,
+            "color": false
+          },
+          {
+            "id": "shuttle",
+            "name": "Shuttle",
+            "byte": 19,
+            "color": false
+          },
+          {
+            "id": "custom",
+            "name": "Custom (per-key)",
+            "byte": 20,
+            "speed": false
+          }
         ]
       },
       "actuation": {
         "_note": "Same table, same records, same firmware as the wired entry — only the frame paging differs (42 x 0x18 chunks, CONFIRMED-BY-CAPTURE in the dongle 0x27/0x17 sweeps). Ranges SOURCE-ONLY from vendor Trigger_Data, as on the wired entry. deadzoneScope 'global' is a firmware fact (0x11/0x21 table), transport-independent — but the deadzone CAPABILITY is 'wip' here because no 0x21 write was ever observed over the RF bridge. switches [] for the same reason as wired (axis ids never captured).",
         "deadzoneScope": "global",
-        "travelRange": [0.1, 3.4],
-        "rtRange": [0.01, 3.4],
-        "deadzoneRange": [0.0, 0.5],
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.01,
+          3.4
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
         "switches": []
       },
       "_statusNote": "supported since 2026-07-21. Was 'bringup' while only the vendor's own frames had been seen over RF; every capability this entry advertises has since been round-tripped by Aether's own code against the physical receiver with the cable OUT: device info (0x10), lighting write + read-back (0x23/0x13), the full 42-page actuation table (0x27/0x17, a 1.77 mm trip written, read back, table restored byte-identical), the persistent per-key table (0x24), and macros (0x25/0x15). What stays gated is gated on evidence, not on doubt about the transport: host effects are FALSE because the RF bridge accepts 0x32 stream writes and silently drops them, and deadzone/socd/calibration remain 'wip' because they were never exercised across the bridge.",
       "status": "supported",
-      "issues": [6]
+      "issues": [
+        6
+      ]
     },
     {
       "slug": "aula-mini60he-pro-80b2",
@@ -370,9 +980,15 @@
       "usage_page": "0xFF68",
       "keymap": "ui/layouts/aula-mini60he-pro.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
-      "issues": [6]
+      "issues": [
+        6
+      ]
     },
     {
       "slug": "aula-mini68he",
@@ -385,7 +1001,11 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-win68he-max.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
       "issues": []
     },
@@ -400,7 +1020,11 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-win68he-max.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
       "issues": []
     },
@@ -415,7 +1039,11 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-win68he-max.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
       "issues": []
     },
@@ -430,7 +1058,11 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-f75.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
       "issues": []
     },
@@ -445,41 +1077,348 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-mini60he-max.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
-      "issues": [1, 4]
+      "issues": [
+        1,
+        4
+      ]
     },
     {
       "slug": "aula-win60he-max",
-      "offerInUi": false,
+      "offerInUi": true,
       "name": "Aula Win60 HE Max",
       "vid": "0x1CA2",
       "pid": "0x1902",
       "formFactor": "60%",
-      "usage_page": null,
+      "usage_page": "0xFFA0",
       "keymap": "ui/layouts/aula-win60he-max.json",
-      "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
-      "status": "planned",
-      "issues": [5]
+      "protocol": "protocol_sparkplay",
+      "capabilities": {
+        "lighting": true,
+        "actuation": true,
+        "perKeyRgb": true,
+        "rapidTrigger": true,
+        "deadzone": true,
+        "socd": true,
+        "gamepad": true,
+        "macros": true,
+        "calibration": true
+      },
+      "actuation": {
+        "deadzoneScope": "per-key",
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.01,
+          3.4
+        ],
+        "deadzoneRange": [
+          0.0,
+          0.5
+        ],
+        "switches": []
+      },
+      "status": "supported",
+      "issues": [
+        5
+      ]
     },
     {
       "slug": "aula-win68he-max",
-      "offerInUi": false,
-      "name": "Aula win68 HE Max",
+      "offerInUi": true,
+      "name": "Aula WIN 68 HE Max",
       "vid": "0x1CA2",
       "pid": "0x1901",
       "formFactor": "65%",
-      "usage_page": null,
+      "usage_page": "0xFFA0",
       "keymap": "ui/layouts/aula-win68he-max.json",
-      "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
-      "status": "planned",
-      "issues": [7]
+      "protocol": "protocol_sparkplay",
+      "capabilities": {
+        "lighting": true,
+        "actuation": true,
+        "perKeyRgb": true,
+        "rapidTrigger": true,
+        "deadzone": true,
+        "socd": true,
+        "gamepad": true,
+        "macros": true,
+        "calibration": true
+      },
+      "actuation": {
+        "deadzoneScope": "per-key",
+        "travelRange": [
+          0.1,
+          3.4
+        ],
+        "rtRange": [
+          0.01,
+          3.4
+        ],
+        "deadzoneRange": [
+          0.0,
+          1.0
+        ],
+        "switches": [
+          {"id": "yongchun", "code": 11, "short": "YC", "name": "Yongchun", "sub": "Wing Chun Magnetic", "dot": "#409e0a",
+           "maker": "Aula", "travel": "3.4 mm", "range": "0.01 – 3.4 mm"},
+          {"id": "jade-pro", "code": 1, "short": "JP", "name": "Jade Pro", "sub": "Magnetic Jade Pro", "dot": "#85713d",
+           "maker": "Gateron", "travel": "3.3 mm", "range": "0.01 – 3.3 mm"},
+          {"id": "black-emperor", "code": 14, "short": "BE", "name": "Black Emperor", "sub": "Black King Magnetic", "dot": "#f70084",
+           "maker": "Aula", "travel": "3.4 mm", "range": "0.01 – 3.4 mm"},
+          {"id": "ttc-king", "code": 3, "short": "TK", "name": "TTC King", "sub": "Magnet King", "dot": "#4c8074",
+           "maker": "TTC", "travel": "3.3 mm", "range": "0.01 – 3.3 mm"}
+        ],
+        "defaultSwitch": "yongchun"
+      },
+      "lighting": {
+        "hostEngine": false,
+        "simReplay": "win68he-max",
+        "modeListSource": "static",
+        "brightnessMax": 4,
+        "speedMax": 4,
+        "brightnessMin": 0,
+        "speedMin": 0,
+        "offModeByte": 0,
+        "customModeByte": 21,
+        "modes": [
+          {
+            "id": "wave",
+            "byte": 1,
+            "name": "Rippling Water",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "neon",
+            "byte": 2,
+            "name": "Tide Flux",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "radar",
+            "byte": 3,
+            "name": "Soft Ripples",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "cross",
+            "byte": 4,
+            "name": "Spinning Storm",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "breath",
+            "byte": 5,
+            "name": "Lucky Rainbow",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "static",
+            "byte": 0,
+            "name": "Static",
+            "speed": false,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": false
+          },
+          {
+            "id": "aurora",
+            "byte": 6,
+            "name": "Glowing Rainbow",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "ripple",
+            "byte": 7,
+            "name": "Radiant Glow",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "twinkle",
+            "byte": 8,
+            "name": "Shifting Panes",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "reactive",
+            "byte": 9,
+            "name": "Wave Shift",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "striation",
+            "byte": 10,
+            "name": "Shape Shift",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "fireworks",
+            "byte": 11,
+            "name": "Sine Wave",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "frenzy",
+            "byte": 12,
+            "name": "Smooth Flow",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "autorip",
+            "byte": 13,
+            "name": "Blooming Flowers",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "speedres",
+            "byte": 14,
+            "name": "Colorful Pattern",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "rain",
+            "byte": 15,
+            "name": "Heavy Rain",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "comet",
+            "byte": 16,
+            "name": "Eternal Pulse",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "tide",
+            "byte": 17,
+            "name": "Traceless Steps",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "custom",
+            "byte": 21,
+            "name": "Custom",
+            "speed": false,
+            "color": true,
+            "bg": false,
+            "fullColor": false,
+            "direction": false
+          },
+          {
+            "id": "snow-blossoms",
+            "byte": 18,
+            "name": "Snow Blossoms",
+            "speed": true,
+            "color": false,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "laser-beam",
+            "byte": 19,
+            "name": "Laser Beam",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          },
+          {
+            "id": "water-ripples",
+            "byte": 20,
+            "name": "Water Ripples",
+            "speed": true,
+            "color": true,
+            "bg": false,
+            "fullColor": true,
+            "direction": true
+          }
+        ],
+        "_note": "Firmware PRGB effect table. Mode bytes/names cross-checked against the official SparkPlay bundle (its PRGBPackV2 caller: 20 dynamic effects in this exact order, static with 8 slots where 0 is rainbow and 1..7 are palette slots, and dynamic colour id 0 = rainbow, 1..7 = palette 0..6). HARDWARE-VERIFIED 2026-11-04 on the physical board: static slot 7 gives a multi-hue board; bytes 5 (Lucky Rainbow) and 6 (Glowing Rainbow) DO honour the palette colour (red frame stayed red, green frame stayed green), so they are not colour-locked; every mode takes exactly one foreground colour and none takes a background (PRGB carries no bg field). customModeByte 21 = the vendor's KRGB Custom mode."
+      },
+      "status": "supported",
+      "issues": [
+        7
+      ]
     },
     {
       "slug": "aula-win60he-pro",
-      "_offerNote": "offerInUi false (2026-07-21, user request): SayoDevice 8089:0009. protocol_sayo reproduces the contributor's captures byte-for-byte, but nobody working on Aether owns this board and no frame from Aether has ever reached one. It stays in the registry so a plugged-in board is still detected, named and drawn with an honest explanation \u2014 it is simply never advertised as something you can pick and drive.",
+      "_offerNote": "offerInUi false (2026-07-21, user request): SayoDevice 8089:0009. protocol_sayo reproduces the contributor's captures byte-for-byte, but nobody working on Aether owns this board and no frame from Aether has ever reached one. It stays in the registry so a plugged-in board is still detected, named and drawn with an honest explanation — it is simply never advertised as something you can pick and drive.",
       "offerInUi": false,
       "name": "Aula WIN 60 HE Pro",
       "vid": "0x8089",
@@ -489,9 +1428,15 @@
       "usage_page": "0xFF12",
       "keymap": "ui/layouts/aula-win60he-pro.json",
       "protocol": "protocol_sayo",
-      "capabilities": { "lighting": true, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": true,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "bringup",
-      "issues": [3]
+      "issues": [
+        3
+      ]
     },
     {
       "slug": "aula-f75-tri-mode",
@@ -503,9 +1448,15 @@
       "usage_page": null,
       "keymap": "ui/layouts/aula-f75.json",
       "protocol": null,
-      "capabilities": { "lighting": false, "actuation": false, "perKeyRgb": false },
+      "capabilities": {
+        "lighting": false,
+        "actuation": false,
+        "perKeyRgb": false
+      },
       "status": "planned",
-      "issues": [8]
+      "issues": [
+        8
+      ]
     }
   ]
 }

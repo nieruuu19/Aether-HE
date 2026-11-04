@@ -29,7 +29,7 @@
 
   /* ============================================================
      Active-board name for the top-bar status chip (additive).
-     The chip used to be the hardcoded string "WIN 60 HE", which read wrong
+     The chip used to be the hardcoded string "WIN 68 HE MAX", which read wrong
      the moment Aether became multi-board. It now shows whichever board is
      actually selected.
   
@@ -41,10 +41,10 @@
      ============================================================ */
   const BOARD_CTX = window.AetherBoard && window.AetherBoard.BoardContext || React.createContext(null);
   const BOARD_CHIP_LABEL = {
-    "aula-win60-he": "WIN 60 HE"
+    "aula-win60-he": "WIN 68 HE MAX"
   };
   const boardChipName = board => {
-    if (!board) return "WIN 60 HE"; // fail-open: today's string
+    if (!board) return "WIN 68 HE MAX"; // fail-open: today's string
     if (BOARD_CHIP_LABEL[board.slug]) return BOARD_CHIP_LABEL[board.slug];
     return String(board.name || "").replace(/^aula\s+/i, "") // vendor prefix is noise here
     .replace(/\s*\([^)]*\)\s*/g, " ") // drop "(wired)" / "(2.4GHz dongle)"

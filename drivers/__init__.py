@@ -56,6 +56,11 @@ def get_driver(profile, device, lock=None):
     if profile is None:
         return Win60Driver(None, device, lock)
     proto = getattr(profile, "protocol", None)
+    if proto == "protocol_sparkplay":
+        # Imported lazily: protocol_sparkplay imports drivers.base, and only
+        # SparkPlay boards should pay for loading its tables.
+        from protocol_sparkplay import SparkPlayDriver
+        return SparkPlayDriver(profile, device, lock)
     cls = DRIVER_BY_PROTOCOL.get(proto)
     if cls is None:
         if proto:

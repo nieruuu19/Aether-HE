@@ -113,7 +113,7 @@
   }, {
     v: 1,
     label: "Repeat ×N",
-    hint: "Plays the sequence N times per press.",
+    hint: "Extra repeats after the first play: N=1 plays twice (firmware behaviour).",
     verified: true
   }, {
     v: 2,
@@ -393,7 +393,7 @@
         className: "font-mono text-[9px] text-[var(--text-faint)]"
       }, m.events.length, " ev"), /*#__PURE__*/React.createElement("span", {
         className: "chip"
-      }, mode.label, m.play_mode === 1 ? ` ${m.repeat_count}` : ""))), bound.length > 0 && /*#__PURE__*/React.createElement("div", {
+      }, m.play_mode === 1 ? `Repeat +${m.repeat_count}` : mode.label))), bound.length > 0 && /*#__PURE__*/React.createElement("div", {
         className: "mt-1 flex flex-wrap gap-1"
       }, bound.map(c => /*#__PURE__*/React.createElement("span", {
         key: c,
@@ -673,7 +673,7 @@
       className: `px-2.5 h-8 rounded-md border font-display text-[10.5px] uppercase tracking-[0.14em] transition-all
                             ${d.playMode === p.v ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)]" : "border-[var(--line)] bg-white/[0.02] text-[var(--text-dim)] hover:text-[var(--text)]"}
                             ${p.verified ? "" : "opacity-70"}`
-    }, p.label, p.verified ? "" : " ?")), d.playMode === 1 && /*#__PURE__*/React.createElement("input", {
+    }, p.label, p.verified ? "" : " ?")), d.playMode === 1 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
       type: "number",
       min: 1,
       max: s.limits.maxRepeat,
@@ -682,8 +682,12 @@
         repeat: Math.max(1, Math.min(s.limits.maxRepeat, +e.target.value || 1))
       }),
       className: "input w-[72px] h-8 py-0 px-2 font-mono text-[11px] text-right",
-      title: "Repeat count"
-    })), d.playMode >= 2 && /*#__PURE__*/React.createElement("div", {
+      title: "Extra repeats after the first play"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "font-mono text-[9.5px] text-[var(--text-faint)]"
+    }, "extra \xB7 plays ", d.repeat + 1, "\xD7"))), d.playMode === 1 && /*#__PURE__*/React.createElement("div", {
+      className: "mt-1"
+    }, /*#__PURE__*/React.createElement(Note, null, "The board plays the sequence once, then repeats it N more times \u2014 a count of 1 plays twice.")), d.playMode >= 2 && /*#__PURE__*/React.createElement("div", {
       className: "mt-1"
     }, /*#__PURE__*/React.createElement(Note, {
       tone: "warn"

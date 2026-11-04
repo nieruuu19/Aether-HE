@@ -76,7 +76,7 @@ KB_ROWS.flat().forEach(([label, _u, code]) => { LABEL_OF_CODE[code] = label; });
    1 were seen on the wire; 2 and 3 exist in the vendor UI but are unverified. */
 const PLAY_MODES = [
   { v: 0, label: "Once",      hint: "Plays the sequence once per press.", verified: true },
-  { v: 1, label: "Repeat ×N", hint: "Plays the sequence N times per press.", verified: true },
+  { v: 1, label: "Repeat ×N", hint: "Extra repeats after the first play: N=1 plays twice (firmware behaviour).", verified: true },
   { v: 2, label: "Toggle",    hint: "Vendor macroType3 — press to start, press again to stop. NOT verified on hardware.", verified: false },
   { v: 3, label: "Hold",      hint: "Vendor macroType4 — repeats while held. NOT verified on hardware.", verified: false },
 ];
@@ -281,7 +281,7 @@ function LibraryWidget(ctx) {
                   {m && (
                     <span className="ml-auto flex items-center gap-1.5 shrink-0">
                       <span className="font-mono text-[9px] text-[var(--text-faint)]">{m.events.length} ev</span>
-                      <span className="chip">{mode.label}{m.play_mode === 1 ? ` ${m.repeat_count}` : ""}</span>
+                      <span className="chip">{m.play_mode === 1 ? `Repeat +${m.repeat_count}` : mode.label}</span>
                     </span>
                   )}
                 </div>
@@ -481,11 +481,15 @@ function EditorWidget(ctx) {
               </button>
             ))}
             {d.playMode === 1 && (
-              <input type="number" min={1} max={s.limits.maxRepeat} value={d.repeat}
-                     onChange={e => updateDraft({ repeat: Math.max(1, Math.min(s.limits.maxRepeat, +e.target.value || 1)) })}
-                     className="input w-[72px] h-8 py-0 px-2 font-mono text-[11px] text-right" title="Repeat count"/>
+              <>
+                <input type="number" min={1} max={s.limits.maxRepeat} value={d.repeat}
+                       onChange={e => updateDraft({ repeat: Math.max(1, Math.min(s.limits.maxRepeat, +e.target.value || 1)) })}
+                       className="input w-[72px] h-8 py-0 px-2 font-mono text-[11px] text-right" title="Extra repeats after the first play"/>
+                <span className="font-mono text-[9.5px] text-[var(--text-faint)]">extra · plays {d.repeat + 1}×</span>
+              </>
             )}
           </div>
+          {d.playMode === 1 && <div className="mt-1"><Note>The board plays the sequence once, then repeats it N more times — a count of 1 plays twice.</Note></div>}
           {d.playMode >= 2 && <div className="mt-1"><Note tone="warn">Toggle / Hold come from the vendor UI's option list and were never captured on the wire — the board may ignore them.</Note></div>}
         </div>
 

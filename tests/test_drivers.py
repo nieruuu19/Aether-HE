@@ -1594,7 +1594,8 @@ def test_api_list_boards_shared_vidpid_sibling_not_marked_connected(monkeypatch)
     # two MINI 60 HE PRO entries stay offered while NOT connected
     offered = {b["slug"] for b in out["boards"] if b["offered"]}
     assert offered == {"aula-win60-he", "aula-win68-he",
-                       "aula-mini60he-pro", "aula-mini60he-pro-24g"}
+                       "aula-mini60he-pro", "aula-mini60he-pro-24g",
+                       "aula-win60he-max", "aula-win68he-max"}
     assert by_slug["aula-mini60he-pro"]["connected"] is False
     assert by_slug["aula-mini60he-pro-24g"]["connected"] is False
 
@@ -1724,3 +1725,279 @@ def test_livereader_self_terminates_when_handle_dies_midstream():
         dev._dev = None
     lr._thread.join(4)
     assert not lr._thread.is_alive(), "LiveReader spun forever on a dead handle"
+
+
+# ------------------------------------------------- SparkPlay colour table ----
+# The vendor UI (magnet.aulastar.com) exposes the keyboard's own 7-slot colour
+# table as Color1..Color7 plus "colorful". These exercise that model on the
+# SparkPlay driver without any hardware: the wire send is stubbed out.
+def _sparkplay_lighting_only():
+    import protocol_sparkplay as sp
+    d = sp.SparkPlayDriver.__new__(sp.SparkPlayDriver)
+    d._lock = threading.RLock()
+    d._version = "1.0.9"
+    d._light_state = {
+        "palette": [(0, 0, 0)] * 7, "switch": True, "big": 1, "mode": 0,
+        "lum": 4, "speed": 4, "sleep": 30, "static": 0, "dyn": 0,
+        "direction": 0, "super": 0,
+    }
+    d.sent = 0
+    d._send_light = lambda: setattr(d, "sent", d.sent + 1)
+    return d
+
+
+_PAL7 = [(255, 0, 0), (255, 140, 0), (255, 212, 0), (30, 255, 122),
+         (0, 183, 255), (157, 78, 221), (255, 255, 255)]
+
+
+def test_sparkplay_palette_is_written_and_the_slot_selected():
+    d = _sparkplay_lighting_only()
+    d.set_lighting(0, _PAL7[3], palette=_PAL7, color_slot=3)
+    assert d._light_state["palette"] == _PAL7
+    assert d._light_state["static"] == 3       # static numbers slots 0..6
+    assert d.sent == 1
+
+
+def test_sparkplay_dynamic_colour_id_follows_the_slot():
+    d = _sparkplay_lighting_only()
+    d.set_lighting(5, (0, 255, 0), palette=_PAL7, color_slot=2)
+    assert d._light_state["dyn"] == 3          # vendor id = slot + 1
+    d.set_lighting(5, (0, 255, 0), palette=_PAL7, color_slot=2, full_color=1)
+    assert d._light_state["dyn"] == 0          # colorful = full spectrum
+
+
+def test_sparkplay_single_colour_callers_keep_the_palette_lookup():
+    """No palette/color_slot => the shipped behaviour: reuse a matching slot,
+    otherwise overwrite slot 0 (the simple set_color API path)."""
+    d = _sparkplay_lighting_only()
+    d._light_state["palette"] = [(10, 20, 30)] + [(0, 0, 0)] * 6
+    d.set_lighting(0, (10, 20, 30))
+    assert d._light_state["static"] == 0
+    d.set_lighting(0, (1, 2, 3))
+    assert d._light_state["palette"][0] == (1, 2, 3)
+
+
+def test_sparkplay_palette_read_reports_slots_and_hex():
+    d = _sparkplay_lighting_only()
+    d._light_state.update(palette=_PAL7, mode=5, dyn=4)   # dynamic slot 3
+    d._read_light_state = lambda: dict(d._light_state)
+    out = d.get_lighting()
+    assert out["palette"] == ["#ff0000", "#ff8c00", "#ffd400", "#1eff7a",
+                              "#00b7ff", "#9d4edd", "#ffffff"]
+    assert out["slot"] == 3 and out["full_color"] == 0
+    d._light_state.update(mode=5, dyn=0)                  # colorful
+    out = d.get_lighting()
+    assert out["slot"] is None and out["full_color"] == 1
+
+
+# ----------------------------------------------------- SparkPlay SOCD pairs ----
+# The payload index follows the vendor's SOCDOptions order (last input, key 1,
+# key 2, neutralise). Apply must also retire pairs the board already holds:
+# the firmware accumulates them, so writing a new pair never removes an old one.
+def _sparkplay_socd_only(version="1.0.9"):
+    import protocol_sparkplay as sp
+    d = sp.SparkPlayDriver.__new__(sp.SparkPlayDriver)
+    d._lock = threading.RLock()
+    d._version = version
+    keys = list(sp.SP_IDX_TO_KEY_ID)
+    d._touch_mode_cache = {sp_i: sp.TOUCH_SINGLE for sp_i in keys}
+    d._adv_type_cache = {sp_i: sp.ADV_NONE for sp_i in keys}
+    d._socd_partner = {}
+    d._records = []
+    d.frames = []
+    d.records = {}
+    d._send = lambda cmd, payload, fill=0: d.frames.append((cmd, list(payload)))
+    d._write_records = lambda recs, delay=0: d._records.extend(recs)
+    d.read_key_records = lambda: dict(d.records)
+    return d
+
+
+def test_sparkplay_keymap_code_of_returns_the_ui_design_code():
+    """Reads must speak the on-screen keyboard's codes: the bindings list is
+    matched against selected keys ("A"), so a browser code ("KeyA") never
+    matched and Unbind stayed disabled."""
+    import os
+    import device_state
+    import protocol_sparkplay as sp
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    km = device_state.KeyMap(os.path.join(root, "ui", "layouts", "aula-win68he-max.json"))
+    sp.ensure_keymap_populated(km)
+    assert km.code_of(64) == "A"
+    assert km.code_of(66) == "D"
+    assert km.code_of(21) == "Escape"
+    assert km.code_of(34) == "Backspace"
+    assert km.code_of(35) == "Ins"
+    assert km.code_of(73) == "Semi"
+    assert km.code_of(94) == "Dot"
+    for idx, code in sp.UI_CODE_BY_SP.items():
+        assert km.index_of_code[code] == idx
+
+
+def test_sparkplay_macro_bindings_are_keyed_by_ui_code():
+    """list_macros bindings must match the keyboard grid's selected codes, or
+    the Bind/Unbind buttons can never see a bound key."""
+    import os
+    import device_state
+    import protocol_sparkplay as sp
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    a = _api()
+    a.km = sp.ensure_keymap_populated(
+        device_state.KeyMap(os.path.join(root, "ui", "layouts", "aula-win68he-max.json")))
+    a.driver = types.SimpleNamespace(read_macro_bindings=lambda: {64: 0, 66: 1})
+    assert a._macro_bindings_by_code() == {"A": 0, "D": 1}
+
+
+def test_sparkplay_socd_mode_index_matches_vendor_option_order():
+    d = _sparkplay_socd_only()
+    idx = {m: d._socd_payload(0x04, 0x07, m)[8] for m in (1, 2, 3, 4)}
+    assert idx == {1: 0, 2: 1, 3: 2, 4: 3}
+
+
+def test_sparkplay_socd_payload_carries_bind_and_delay():
+    """V4 frame: keys 1-2, two u16 key-value slots, bind, mode, u16 delay."""
+    d = _sparkplay_socd_only()
+    assert d._socd_payload(0x04, 0x07, 1, bind=1, delay=10) == [
+        1, 4, 7, 4, 0, 7, 0, 1, 0, 10, 0]
+    # Position binding sends no key values in the DKSV slots.
+    assert d._socd_payload(0x04, 0x07, 1, bind=0, delay=0) == [
+        1, 4, 7, 0, 0, 0, 0, 0, 0, 0, 0]
+
+
+def test_sparkplay_socd_key_values_are_independent_of_the_keys():
+    """The vendor dialog binds each position to its own key value (A→D, D→E)."""
+    d = _sparkplay_socd_only()
+    assert d._socd_payload(0x04, 0x07, 1, bind=1, v1=0x07, v2=0x08) == [
+        1, 4, 7, 7, 0, 8, 0, 1, 0, 0, 0]
+    # Position binding discards supplied values.
+    assert d._socd_payload(0x04, 0x07, 1, bind=0, v1=0x07, v2=0x08)[3:7] == [0, 0, 0, 0]
+
+
+def test_sparkplay_socd_delay_is_clamped_to_the_vendor_range():
+    d = _sparkplay_socd_only()
+    assert d._socd_payload(4, 7, 1, delay=-5)[9:11] == [0, 0]
+    assert d._socd_payload(4, 7, 1, delay=999)[9:11] == [50, 0]
+    assert d.SOCD_DELAY_MAX_MS == 50
+
+
+def test_sparkplay_socd_older_firmware_drops_the_delay_word():
+    d3 = _sparkplay_socd_only("1.0.5")
+    assert d3._socd_payload(4, 7, 1, bind=1, delay=10) == [1, 4, 7, 4, 0, 7, 0, 1, 0]
+    d2 = _sparkplay_socd_only("1.0.3")
+    assert d2._socd_payload(4, 7, 1, bind=1, delay=10) == [1, 4, 7, 0, 7, 4, 0]
+
+
+def test_sparkplay_set_socd_forwards_the_pair_options():
+    import protocol_sparkplay as sp
+    d = _sparkplay_socd_only()
+    d.set_socd([{"model": 2, "key1_hid": 4, "key2_hid": 7,
+                 "bind": 1, "delay": 25,
+                 "val1_hid": 7, "val2_hid": 8}])
+    payload = d.frames[-1][1]
+    assert payload[3:7] == [7, 0, 8, 0]
+    assert payload[7] == 1 and payload[8] == 1 and payload[9:11] == [25, 0]
+
+
+def test_sparkplay_set_socd_clears_pairs_the_board_already_holds():
+    import protocol_sparkplay as sp
+    d = _sparkplay_socd_only()
+    spa, spb = 64, 66                     # A, D
+    d.records = {
+        spa: {"key_id": 4, "type": "socd"},
+        spb: {"key_id": 7, "type": "socd"},
+    }
+    d.set_socd([{"model": 1, "key1_hid": 26, "key2_hid": 22}])   # W / S
+    cleared = {kid for kid, prop, value in d._records
+               if prop == sp.L_MODE and (value & 0x0F) == sp.ADV_NONE}
+    assert cleared == {4, 7}
+    assert [cmd for cmd, _ in d.frames] == [sp.CMD_SOCD]
+    assert d._adv_type_cache[spa] == sp.ADV_NONE
+    assert d._socd_partner == {44: 65, 65: 44}
+
+
+def test_sparkplay_empty_socd_list_only_clears():
+    import protocol_sparkplay as sp
+    d = _sparkplay_socd_only()
+    d.records = {64: {"key_id": 4, "type": "socd"},
+                 66: {"key_id": 7, "type": "socd"}}
+    d.set_socd([])
+    assert d.frames == []
+    assert {kid for kid, prop, value in d._records
+            if prop == sp.L_MODE} == {4, 7}
+
+
+def test_sparkplay_socd_clear_survives_a_read_failure():
+    import protocol_sparkplay as sp
+    d = _sparkplay_socd_only()
+
+    def boom():
+        raise OSError("device gone")
+
+    d.read_key_records = boom
+    d._adv_type_cache[64] = sp.ADV_SOCD
+    d.set_socd([])
+    assert {kid for kid, prop, value in d._records
+            if prop == sp.L_MODE and (value & 0x0F) == sp.ADV_NONE} == {4}
+
+
+def test_sparkplay_trigger_detail_reports_the_stored_axis():
+    """Switch View needs L_AXIS from the same sweep as travel/RT. The stored
+    value is a POSITION in the board's CMD_SYS 118 axis list (0 = factory
+    switch), so it is reported as the stable axis id."""
+    import device_state
+    import protocol_sparkplay as sp
+
+    d = sp.SparkPlayDriver.__new__(sp.SparkPlayDriver)
+    for name in ("_touch_mode_cache", "_adv_type_cache", "_actuation_cache",
+                 "_rt_press_cache", "_rt_release_cache", "_dz_top_cache",
+                 "_dz_bot_cache", "_user_dz_top_cache", "_user_dz_bot_cache",
+                 "_rt_cont_cache"):
+        setattr(d, name, {})
+    d._global_travel_mm = 2.0
+    d._global_dz_top_mm = 0.2
+    d._global_dz_bot_mm = 0.2
+    d._save_dz_memory = lambda: None
+    d.read_axis_ids = lambda *a, **k: [11, 1, 14, 3]
+
+    kid = sp.SP_IDX_TO_KEY_ID[64]              # matrix slot 64 = UI "A"
+    values = {sp.L_MODE: {kid: 0}, sp.L_DB0: {kid: 170}, sp.L_AXIS: {kid: 2}}
+    d._read_prop = lambda prop, kids, timeout=0.12: dict(values.get(prop, {}))
+
+    out = d.read_trigger_detail(device_state.KeyMap())
+    assert out["A"]["axis"] == 14              # position 2 -> Black Emperor id
+    assert out["A"]["travel_mm"] == 0.17
+    assert out["S"]["axis"] == 11              # stored 0 -> factory switch
+
+
+def test_sparkplay_switch_writes_use_the_boards_position_table():
+    """L_AXIS stores a POSITION in CMD_SYS 118's axis list, not the axis id.
+
+    The vendor UI renders `axisList[stored]`, and the WIN 68 HE Max lists four
+    axes ([11, 1, 14, 3]); writing the id 11 straight through (as the old code
+    did) landed at position 11 and the vendor site showed "???". Writes must
+    translate id -> position."""
+    import protocol_sparkplay as sp
+
+    d = _sparkplay_socd_only()
+    d._axis_ids = None
+    body = bytes([0, 118, 0x00, 11, 0x00, 1, 0x00, 14, 0x00, 3])
+    d._query = lambda cmd, payload, timeout=0.2, want_sub=None: body
+    assert d.read_axis_ids() == [11, 1, 14, 3]
+    assert d.read_axis_ids() == [11, 1, 14, 3]   # cached, one query
+
+    d.set_switch({21: 11, 22: 14, 23: 1})
+    written = {kid: val for kid, prop, val in d._records if prop == sp.L_AXIS}
+    assert written == {sp.SP_IDX_TO_KEY_ID[21]: 0,
+                       sp.SP_IDX_TO_KEY_ID[22]: 2,
+                       sp.SP_IDX_TO_KEY_ID[23]: 1}
+
+
+def test_sparkplay_switch_write_refuses_an_id_outside_the_axis_list():
+    import protocol_sparkplay as sp
+    import pytest as _pytest
+
+    d = _sparkplay_socd_only()
+    d._axis_ids = None
+    d._query = lambda cmd, payload, timeout=0.2, want_sub=None: None  # list unreadable
+    with _pytest.raises(ValueError):
+        d.set_switch({21: 11})
+    assert d._records == []

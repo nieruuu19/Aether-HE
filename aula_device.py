@@ -21,6 +21,17 @@ CMD_TRAVEL = 0x21    # analog travel report / actuation family (decimal 33)
 
 TRAVEL_FULL_RAW = 400  # depth raw value at ~4.00mm (units of 0.01mm)
 
+# Aula WIN 68 HE MAX (SparkPlay / magnet.aulastar.com protocol family). Not a
+# boards.py default, but it shares the vendor interface model: 64-byte frames
+# behind HID report id 0x00 on usage page 0xFFA0.
+WIN68_VID = 0x1CA2
+WIN68_PID = 0x1901
+WIN68_USAGE_PAGE = 0xFFA0
+WIN68_NAME = "Aula WIN 68 HE MAX"
+#: Inter-frame pacing the SparkPlay firmware expects between output reports.
+#: Other boards send more frames per second; they keep sleep_s at 0.
+DEFAULT_SLEEP_MS = 12
+
 log = logging.getLogger(__name__)
 
 
@@ -139,12 +150,28 @@ class AulaDevice:
         # even if something reopened the handle in between.
         self._last_rx = 0.0
         self.dead_events = 0
+        #: Seconds to sleep after each successful output report (SparkPlay
+        #: pacing; see DEFAULT_SLEEP_MS). Set in open() from the target board.
+        self.sleep_s = 0.0
 
     def _target(self):
         if self._profile is not None:
-            return (self._profile.vid, self._profile.pid,
-                    self._profile.usage_page or VENDOR_USAGE_PAGE, self._profile.name)
-        return AULA_VID, AULA_PID, VENDOR_USAGE_PAGE, "Aula Win60 HE"
+            vid, pid = self._profile.vid, self._profile.pid
+            usage_page = self._profile.usage_page or VENDOR_USAGE_PAGE
+            name = self._profile.name
+        else:
+            vid, pid, usage_page, name = AULA_VID, AULA_PID, VENDOR_USAGE_PAGE, "Aula Win60 HE"
+        # The registry-unavailable fallback (and any configured board that is
+        # not actually attached) would otherwise pick the Win60 pair. When the
+        # WIN 68 HE MAX is the board on USB, drive that instead of failing.
+        if (vid, pid) != (WIN68_VID, WIN68_PID):
+            try:
+                if (hid.enumerate(WIN68_VID, WIN68_PID)
+                        and find_vendor_interface(vid, pid, usage_page) is None):
+                    return WIN68_VID, WIN68_PID, WIN68_USAGE_PAGE, WIN68_NAME
+            except Exception:
+                pass
+        return vid, pid, usage_page, name
 
     def present(self):
         """True if the board is enumerated right now (no handle is opened).
@@ -164,7 +191,9 @@ class AulaDevice:
         log.info("Opening %s interface %s", name, info["interface_number"])
         try:
             dev.open_path(info["path"])
-            dev.set_nonblocking(False)
+            # Readers poll non-blocking (read() enforces this per call too):
+            # a blocking handle would stall a reader on a silence.
+            dev.set_nonblocking(True)
         except Exception:
             # Don't leak the just-opened handle if set_nonblocking (or the
             # open) fails before we store it — a retry would open a second one.
@@ -180,6 +209,8 @@ class AulaDevice:
             old = self._dev
             self._dev = dev
             self._info = info
+            self.sleep_s = (DEFAULT_SLEEP_MS / 1000.0
+                            if vid == WIN68_VID else 0.0)
             # A new handle has proven nothing yet: the first status() after
             # an open probes it instead of trusting the old handle's replies.
             self._last_rx = 0.0
@@ -248,21 +279,29 @@ class AulaDevice:
     def write(self, payload):
         """Output report. payload[0] MUST be the Report ID (use 0x00 if unset).
 
+        Exception: a 64-byte SparkPlay frame has NO report id and starts with
+        its 0x5C/0xDC magic, so report id 0x00 is prepended for it.
+
         hidapi returns -1 (it does not raise) when the OS refuses the write —
         a handle to a board that re-enumerated. That used to be ignored, so
         every caller reported success to the UI. Now a failed write drops the
         handle (mark-dead) and raises IOError."""
+        buf = bytes(payload)
+        if len(buf) == 64 and buf[0] in (0x5C, 0xDC):
+            buf = b"\x00" + buf
         with self._lock:
             if self._dev is None:
                 raise IOError("device not open")
             try:
-                n = self._dev.write(payload)
+                n = self._dev.write(buf)
             except (IOError, OSError, ValueError) as e:
                 self._drop_dead_locked(f"write raised: {e}")
                 raise IOError(f"HID write failed: {e}") from e
             if n is not None and n < 0:
                 self._drop_dead_locked("write returned -1")
                 raise IOError("HID write failed (device gone?)")
+            if self.sleep_s:
+                time.sleep(self.sleep_s)
             return n
 
     def send_feature(self, payload):
@@ -278,12 +317,27 @@ class AulaDevice:
                 raise IOError("device not open")
             return self._dev.get_feature_report(report_id, length)
 
-    def read(self, length, timeout_ms=100):
+    def read(self, length=65, timeout_ms=0):
+        """One input report. timeout_ms=0 returns whatever is queued right now
+        (possibly empty); a positive timeout polls the non-blocking handle
+        until data arrives or the deadline passes. hidapi's own timeout only
+        applies to blocking handles, so the waiting happens here."""
         with self._lock:
             if self._dev is None:
                 raise IOError("device not open")
             try:
-                r = self._dev.read(length, timeout_ms=timeout_ms)
+                self._dev.set_nonblocking(True)
+            except Exception:
+                pass
+            deadline = time.perf_counter() + (timeout_ms or 0) / 1000.0
+            try:
+                while True:
+                    r = self._dev.read(length)
+                    if r:
+                        break
+                    if not timeout_ms or time.perf_counter() >= deadline:
+                        break
+                    time.sleep(0.001)
             except (IOError, OSError, ValueError) as e:
                 self._drop_dead_locked(f"read raised: {e}")
                 raise IOError(f"HID read failed: {e}") from e

@@ -1,40 +1,47 @@
 (() => {
-/* WIN60 HE keyboard visualization with per-key live actuation. */
+/* WIN 68 HE MAX keyboard visualization with per-key live actuation. */
 const { useState, useEffect, useRef, useMemo } = React;
 
-/* 60% ANSI layout — each row totals 60 cols (each 0.25u = 1 col). */
+/* 65% (68-key) layout — each row totals 64 cols (each 0.25u = 1 col).
+   Geometry matches ui/layouts/aula-win68he-max.json: the nav column
+   (Ins/Del/PgUp/PgDn) on the right edge and the arrow cluster on rows 4-5. */
 /* Each entry: [label, units, code, fn?] — `units` is in 0.25u increments. */
 /* FN-layer labels transcribed from the Aula Win60 HE box —
    "Magnetic Switch Keyboard · 30 Seconds Quick Operation Guide". */
 const KB_ROWS = [
   [
-    ["Esc", 4, "Escape", "`~"], ["1!", 4, "1", "F1"], ["2@", 4, "2", "F2"], ["3#", 4, "3", "F3"], ["$4", 4, "4", "F4"],
+    ["Esc", 4, "Escape", "`~"], ["1!", 4, "1", "F1"], ["2@", 4, "2", "F2"], ["3#", 4, "3", "F3"], ["4$", 4, "4", "F4"],
     ["5%", 4, "5", "F5"], ["6^", 4, "6", "F6"], ["7&", 4, "7", "F7"], ["8*", 4, "8", "F8"], ["9(", 4, "9", "F9"],
-    ["0)", 4, "0", "F10"], ["-_", 4, "Minus", "F11"], ["=+", 4, "Equal", "F12"], ["Back", 8, "Backspace", "Color"]
+    ["0)", 4, "0", "F10"], ["-_", 4, "Minus", "F11"], ["=+", 4, "Equal", "F12"], ["Back", 8, "Backspace", "Color"],
+    ["Ins", 4, "Ins", ""]
   ],
   [
     ["Tab", 6, "Tab", "Light FX"], ["Q", 4, "Q", ""], ["W", 4, "W", "↑"], ["E", 4, "E", "Vol−"], ["R", 4, "R", "Vol+"],
     ["T", 4, "T", "Prev"], ["Y", 4, "Y", "Next"], ["U", 4, "U", "Play"], ["I", 4, "I", ""], ["O", 4, "O", "Mail"],
-    ["P", 4, "P", "Home"], ["{[", 4, "Lbr", ""], ["}]", 4, "Rbr", ""], ["\\|", 6, "Bsl", ""]
+    ["P", 4, "P", "Home"], ["{[", 4, "Lbr", ""], ["}]", 4, "Rbr", ""], ["\\|", 6, "Bsl", ""],
+    ["Del", 4, "Del", ""]
   ],
   [
     ["Caps", 7, "Caps"], ["A", 4, "A", "←"], ["S", 4, "S", "↓"], ["D", 4, "D", "→"], ["F", 4, "F", "Brt+"],
     ["G", 4, "G", "Brt−"], ["H", 4, "H", ""], ["J", 4, "J", ""], ["K", 4, "K", ""], ["L", 4, "L", ""],
-    [";:", 4, "Semi", "Ins"], ["'\"", 4, "Quot", ""], ["Enter", 9, "Enter", ""]
+    [";:", 4, "Semi", "Ins"], ["'\"", 4, "Quot", ""], ["Enter", 9, "Enter", ""],
+    ["PgUp", 4, "PgUp", ""]
   ],
   [
     ["L-Shift", 9, "LShift"], ["Z", 4, "Z", "Win"], ["X", 4, "X", "Mac"], ["C", 4, "C", ""], ["V", 4, "V", ""],
     ["B", 4, "B", ""], ["N", 4, "N", "Reset"], ["M", 4, "M", "End"], [",<", 4, "Comma", "PgUp"], [".>", 4, "Dot", "PgDn"],
-    ["/?", 4, "Slash", "Del"], ["R-Shift", 11, "RShift"]
+    ["/?", 4, "Slash", "Del"], ["R-Shift", 7, "RShift"],
+    ["↑", 4, "Up", ""], ["PgDn", 4, "PgDn", ""]
   ],
   [
     ["L-Ctrl", 5, "LCtrl"], ["L-Win", 5, "LWin", "WinLk"], ["L-Alt", 5, "LAlt"], ["Space", 25, "Space"],
-    ["R-Alt", 5, "RAlt"], ["Menu", 5, "Menu"], ["R-Ctrl", 5, "RCtrl"], ["Fn", 5, "Fn", "Fn"]
+    ["R-Alt", 4, "RAlt"], ["Fn", 4, "Fn", "Fn"], ["R-Ctrl", 4, "RCtrl"],
+    ["←", 4, "Left", ""], ["↓", 4, "Down", ""], ["→", 4, "Right", ""]
   ]
 ];
 
-/* Compute a fractional width string given units in 0.25u increments out of 60 cols. */
-const ufrac = (u) => `${(u / 60) * 100}%`;
+/* Compute a fractional width string given units in 0.25u increments out of 64 cols. */
+const ufrac = (u) => `${(u / 64) * 100}%`;
 
 const Key = React.memo(({
   label, units, code, fnLabel,
@@ -43,19 +50,29 @@ const Key = React.memo(({
   actuationPoint = 1.70,
   rtPress = 0.05,
   rtRelease = 0.05,
+  deadTop = 0.20,
+  deadBottom = 0.20,
   selected = false,
   highlighted = false,
   mode = "keymap",
   calibrating = false,
   calibrated = false,
   ledColor = null,
+  switchColor = null,
+  switchShort = null,
+  switchSet = false,
+  switchDefault = false,
   onClick = () => {},
   onMouseDown = () => {},
   onMouseEnter = () => {},
   onContextMenu = () => {},
 }) => {
-  const actuated = depth >= actuationPoint && actuationPoint > 0;
-  const progress = Math.min(1, depth / 4);
+  // The HID bridge flags a firmware-triggered key by adding 0.0001 mm to the
+  // reported depth. Strip it for display and use it as the actuated signal.
+  const hwTriggered = Math.round((Number(depth) % 1) * 10000) === 1;
+  const cleanDepth = Number(depth) - (hwTriggered ? 0.0001 : 0);
+  const actuated = hwTriggered || (cleanDepth >= actuationPoint && actuationPoint > 0);
+  const progress = Math.min(1, cleanDepth / 4);
 
   // Background depending on mode. In lighting mode each key shows its real
   // color (effect foreground, or the background color underneath) at FULL
@@ -77,6 +94,13 @@ const Key = React.memo(({
       : `linear-gradient(180deg, ${ledColor}, ${ledColor})`;
   }
 
+  // Switch view: tint each keycap with the switch the firmware reports for
+  // it (L_AXIS -> registry dot). Keys on the board's factory switch get a
+  // fainter tint than keys explicitly assigned another one.
+  const swTint = mode === "switch" && switchColor;
+  const swDim = switchSet ? "80" : "40";
+  const swDimLow = switchSet ? "26" : "12";
+
   // Two-line labels (e.g. "1!" -> shifted/unshifted stack)
   const lines = label.length === 2 && !/^[a-zA-Z]+$/.test(label) && label !== "Fn"
       ? [label[0], label[1]]
@@ -95,7 +119,11 @@ const Key = React.memo(({
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e); }}
       style={{
         gridColumn: `span ${units}`,
-        background: calibrated ? "linear-gradient(180deg, #10b98133, #10b98119)" : bg,
+        background: calibrated ? "linear-gradient(180deg, #10b98133, #10b98119)"
+          : swTint ? `linear-gradient(180deg, ${switchColor}${swDim}, ${switchColor}${swDimLow})`
+          : bg,
+        ...(swTint && !selected && !calibrated
+          ? { borderColor: `${switchColor}${switchSet ? "99" : "55"}` } : null),
       }}
       data-code={code}
       className={`relative rounded-[5px] border text-left
@@ -117,7 +145,7 @@ const Key = React.memo(({
                   }`}>
 
       {/* Travel fill from bottom */}
-      {mode !== "lighting" && depth > 0.02 && (
+      {mode !== "lighting" && cleanDepth > 0.02 && (
         <span aria-hidden className="absolute inset-x-0 bottom-0 pointer-events-none"
               style={{
                 height: progress * 100 + "%",
@@ -144,39 +172,59 @@ const Key = React.memo(({
         )}
       </div>
 
-      {/* Per-key actuation indicator — large enough to actually read at a
-          glance, plus a colored bar whose width = actuationPoint / 4mm so
-          you can spot the outliers without squinting. Lower = teal (more
-          sensitive), higher = amber (more resistant). */}
-      {mode === "actuation" && (
+      {/* Per-key dead band readout — press (top, green) and release
+          (bottom, blue) values so both edges are visible at a glance. */}
+      {mode === "deadband" && (
         <>
-          <span aria-hidden className="absolute left-1 right-1 bottom-[3px] h-[3px] rounded-sm pointer-events-none z-0"
-                style={{
-                  background: `linear-gradient(90deg,
-                    hsl(${Math.max(0, 180 - actuationPoint * 45)} 80% 55%) 0%,
-                    hsl(${Math.max(0, 180 - actuationPoint * 45)} 80% 55%) ${Math.min(100, (actuationPoint / 4) * 100)}%,
-                    rgba(255,255,255,0.06) ${Math.min(100, (actuationPoint / 4) * 100)}%,
-                    rgba(255,255,255,0.06) 100%)`,
-                }}/>
-          <div className="absolute bottom-[7px] inset-x-1 z-10 flex items-end justify-between">
-            <span className="font-mono text-[10px] font-semibold text-[var(--text)] leading-none">
-              {actuationPoint.toFixed(2)}
-            </span>
-            {(rtPress > 0 || rtRelease > 0) && (
-              <div className="flex gap-1 leading-none">
-                <span className="font-mono text-[8.5px] text-rose-300/90">{rtPress.toFixed(2)}</span>
-                <span className="font-mono text-[8.5px] text-emerald-300/90">{rtRelease.toFixed(2)}</span>
-              </div>
-            )}
-          </div>
+          <span className="absolute top-[3px] left-[4px] z-10 font-mono text-[8.5px] font-bold text-[#4ade80] leading-none tracking-tighter">
+            {Number(deadTop != null ? deadTop : 0.20).toFixed(2).replace(/0$/, "")}
+          </span>
+          <span className="absolute bottom-[3px] left-[4px] z-10 font-mono text-[8.5px] font-bold text-[#38bdf8] leading-none tracking-tighter">
+            {Number(deadBottom != null ? deadBottom : 0.20).toFixed(2).replace(/0$/, "")}
+          </span>
         </>
       )}
 
-      {/* Live travel readout — always shown in actuation mode so a released key
-          reads 0.00 (values under 0.05 mm clamp to 0). */}
-      {mode === "actuation" && (
-        <span className="absolute top-1 right-1 z-10 font-mono text-[8px] text-[var(--accent)]/90">
-          {(depth < 0.05 ? 0 : depth).toFixed(2)}
+      {/* Per-key actuation: configured point top-right (only when the key has
+          its own value), RT press/release along the bottom. */}
+      {mode === "actuation" && actuationPoint != null && (
+        <>
+          <span className="absolute top-[3px] right-[4px] z-10 font-mono text-[8.5px] font-bold text-[#4ade80] leading-none tracking-tighter">
+            {Number(actuationPoint).toFixed(2)}
+          </span>
+          {(rtPress > 0 || rtRelease > 0) && (
+            <div className="absolute bottom-[3px] inset-x-[4px] z-10 flex items-center justify-between leading-none">
+              <span className="font-mono text-[8px] font-semibold text-[#38bdf8] tracking-tighter">{Number(rtPress).toFixed(2)}</span>
+              <span className="font-mono text-[8px] font-semibold text-[#fb923c] tracking-tighter">{Number(rtRelease).toFixed(2)}</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Switch View: the axis the firmware stores for this key, with the
+          registry's dot color and short name. A solid dot means the key was
+          assigned a switch; a ring means it runs the board's factory switch. */}
+      {mode === "switch" && (
+        <>
+          {(switchSet || switchDefault) && (
+            <span className={switchSet
+                    ? "absolute top-[4px] right-[4px] z-10 w-2 h-2 rounded-full"
+                    : "absolute top-[4px] right-[4px] z-10 w-2 h-2 rounded-full border"}
+                  style={{ background: switchSet ? switchColor : "transparent",
+                           borderColor: switchColor,
+                           boxShadow: switchSet ? `0 0 6px ${switchColor}` : undefined }}/>
+          )}
+          <span className={`absolute bottom-[3px] left-[4px] z-10 font-mono text-[8.5px] font-bold leading-none tracking-tighter
+                            ${switchSet ? "text-white/85" : switchDefault ? "text-[var(--text-dim)]" : "text-[var(--text-faint)]"}`}>
+            {switchShort || (switchSet ? "?" : "def")}
+          </span>
+        </>
+      )}
+
+      {/* Live depth badge — hidden at rest so a released board stays clean. */}
+      {mode === "actuation" && cleanDepth >= 0.05 && (
+        <span className="absolute bottom-[3px] right-[4px] z-20 px-1 rounded bg-black/80 font-mono text-[8.5px] font-bold text-[var(--accent)]">
+          {cleanDepth.toFixed(2)}
         </span>
       )}
     </button>
@@ -188,6 +236,12 @@ const Key = React.memo(({
   prev.actuationPoint === next.actuationPoint &&
   prev.rtPress === next.rtPress &&
   prev.rtRelease === next.rtRelease &&
+  prev.deadTop === next.deadTop &&
+  prev.deadBottom === next.deadBottom &&
+  prev.switchColor === next.switchColor &&
+  prev.switchShort === next.switchShort &&
+  prev.switchSet === next.switchSet &&
+  prev.switchDefault === next.switchDefault &&
   prev.selected === next.selected &&
   prev.highlighted === next.highlighted &&
   prev.mode === next.mode &&
@@ -196,11 +250,11 @@ const Key = React.memo(({
   prev.ledColor === next.ledColor
 ));
 
-/* Top "WIN 60 HE" pill */
+/* Top "WIN 68 HE MAX" pill */
 const DevicePill = ({ connected }) => (
   <div className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] shadow-[0_0_18px_var(--accent-glow)] whitespace-nowrap">
     <span className="relative inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)] pulse-ring text-[var(--accent)]"/>
-    <span className="font-display font-semibold tracking-[0.18em] text-[12px]">WIN 60 HE</span>
+    <span className="font-display font-semibold tracking-[0.18em] text-[12px]">WIN 68 HE MAX</span>
     <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--accent)]/70 ml-1">
       {connected ? "Linked" : "Offline"}
     </span>
@@ -211,7 +265,7 @@ const DevicePill = ({ connected }) => (
 const KeyboardPanel = ({
   mode, layer = "default", selectedKeys, setSelectedKeys, actuationPoint, rtPress, rtRelease,
   perKeyOverride, ledMap, accent, leftSlot, rightSlot, showPill = true, compact = false,
-  liveDepths = null, calibrating = false, calibratedCodes = null,
+  liveDepths = null, calibrating = false, calibratedCodes = null, switchMap = null,
 }) => {
   const calibSet = calibratedCodes || null;
   // Real per-key travel depth (mm), streamed from the board by the HID bridge
@@ -272,32 +326,48 @@ const KeyboardPanel = ({
 
       {/* Side slots + keyboard */}
       <div className="flex items-start justify-center gap-4">
-        <div className="shrink-0 w-[110px] pt-2 flex flex-col gap-1.5">
-          {leftSlot}
-        </div>
+        {leftSlot && (
+          <div className="shrink-0 w-[110px] pt-2 flex flex-col gap-1.5">
+            {leftSlot}
+          </div>
+        )}
 
         {/* Keyboard board */}
         <div className="relative w-full max-w-[960px] rounded-2xl border border-[var(--line)] bg-gradient-to-b from-white/[0.025] to-black/30 p-3.5 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.8)]">
           <span className="pointer-events-none absolute -top-px left-12 right-12 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
           <div className="flex flex-col gap-[3px]">
             {KB_ROWS.map((row, ri) => (
-              <div key={ri} className="grid w-full gap-[3px]" style={{ gridTemplateColumns: "repeat(60, minmax(0, 1fr))" }}>
+              <div key={ri} className="grid w-full gap-[3px]" style={{ gridTemplateColumns: "repeat(64, minmax(0, 1fr))" }}>
                 {row.map(([label, units, code, fnLabel]) => {
-                  const override = perKeyOverride?.[code] || {};
+                  // Expose telemetry for the Travel Test switch render.
+                  window.__liveDepths = depths;
+                  window.__perKeyOverride = perKeyOverride;
+                  const rawOv = perKeyOverride?.[code];
+                  const override = (rawOv && typeof rawOv === "object")
+                    ? rawOv
+                    : (typeof rawOv === "number" ? { actuation: rawOv, touchMode: 1 } : {});
+                  const hasCustom = (override.touchMode === 1 || override.touchMode === 2);
+                  const sw = switchMap ? switchMap[code] : null;
                   return (
                     <Key
                       key={code}
                       label={label} units={units} code={code} fnLabel={fnLabel}
                       layer={layer}
                       depth={depths[code] || 0}
-                      actuationPoint={override.actuation ?? actuationPoint}
-                      rtPress={override.rtPress ?? rtPress}
-                      rtRelease={override.rtRelease ?? rtRelease}
+                      actuationPoint={hasCustom ? override.actuation : null}
+                      rtPress={override.touchMode === 2 ? (override.rtPress ?? 0) : 0}
+                      rtRelease={override.touchMode === 2 ? (override.rtRelease ?? 0) : 0}
+                      deadTop={override.deadTop != null ? override.deadTop : 0.20}
+                      deadBottom={override.deadBottom != null ? override.deadBottom : 0.20}
                       selected={selectedKeys.has(code)}
                       mode={mode}
                       calibrating={calibrating}
                       calibrated={!!(calibSet && calibSet.has(code))}
                       ledColor={ledMap?.[code] || null}
+                      switchColor={sw ? sw.color : null}
+                      switchShort={sw ? sw.short : null}
+                      switchSet={!!(sw && sw.set)}
+                      switchDefault={!!(sw && sw.default)}
                       onMouseDown={(e) => startDrag(code, e)}
                       onMouseEnter={() => dragOver(code)}
                       onContextMenu={() => setSelectedKeys(prev => {
@@ -312,16 +382,11 @@ const KeyboardPanel = ({
           </div>
         </div>
 
-        <div className="shrink-0 w-[110px] pt-2 flex flex-col gap-1.5 items-end">
-          {/* During Travel Test show the live deepest press; otherwise nothing
-              here (the actuation point is already in the hero badge + per key). */}
-          {mode === "actuation" && liveDepths && (
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-faint)] whitespace-nowrap">
-              Live · <span className="text-[var(--accent)]">{(liveMax < 0.05 ? 0 : liveMax).toFixed(2)}mm</span>
-            </span>
-          )}
-          {rightSlot}
-        </div>
+        {rightSlot && (
+          <div className="shrink-0 w-[110px] pt-2 flex flex-col gap-1.5 items-end">
+            {rightSlot}
+          </div>
+        )}
       </div>
 
       {/* Below-keyboard refresh */}

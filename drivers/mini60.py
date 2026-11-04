@@ -394,7 +394,8 @@ class Mini60Driver(BoardDriver):
         return 1
 
     def set_lighting(self, mode, fg, bg=(0, 0, 0), brightness=4, speed=4,
-                     direction=0, full_color=0, power_on=True):
+                     direction=0, full_color=0, power_on=True,
+                     palette=None, color_slot=None):
         """Send a MINI mode byte, with the Win60-heritage vocabulary
         translation applied ONLY as a fallback for bytes this board does not
         declare natively.
@@ -425,8 +426,8 @@ class Mini60Driver(BoardDriver):
         user-chosen colours being ignored in fixed-colour modes.
 
         Not wired (the builder has no parameters for them): bg, direction,
-        full_color — build_light has no direction byte; needs
-        protocol_mini60 owner (follow-up)."""
+        full_color, palette/color_slot — build_light has no direction byte or
+        stored colour table; needs protocol_mini60 owner (follow-up)."""
         m = int(mode)
         if m not in self._native_modes:
             if m == _WIN60_MODE_STATIC:

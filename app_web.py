@@ -30,6 +30,7 @@ from aula_device import AulaDevice
 import boards
 import drivers
 from drivers import UnsupportedFeature
+import protocol_sparkplay
 import effects
 import device_state
 import gamepad
@@ -59,6 +60,12 @@ INDEX = _RUNTIME if os.path.exists(_RUNTIME) else _BUNDLE
 # Api can keep its accumulated per-key state in raw units without importing
 # any board's protocol module.
 _UNIT_MM = 0.01
+
+# This is a local, customised build: it must never pull code from GitHub. The
+# bridge refuses every update call without touching the network, so a stale
+# cached runtime, the local service server, or a saved autoUpdate=true cannot
+# start a check, download an installer, or quit the app to install one.
+UPDATES_DISABLED = True
 
 
 def _mm_to_raw(mm):
@@ -100,6 +107,101 @@ def _lighting_block(board):
         lt = dict(lt)
         lt["hostEngineMaxFps"] = fps
     return lt
+
+
+_FALLBACK_LIGHT_MODES = [
+    ("wave", 1, "Rippling Water", True),
+    ("neon", 2, "Tide Flux", True),
+    ("radar", 3, "Soft Ripples", True),
+    ("cross", 4, "Spinning Storm", True),
+    ("breath", 5, "Lucky Rainbow", False),
+    ("static", 0, "Static", True),
+    ("aurora", 6, "Glowing Rainbow", False),
+    ("ripple", 7, "Radiant Glow", True),
+    ("twinkle", 8, "Shifting Panes", True),
+    ("reactive", 9, "Wave Shift", True),
+    ("striation", 10, "Shape Shift", True),
+    ("fireworks", 11, "Sine Wave", True),
+    ("frenzy", 12, "Smooth Flow", True),
+    ("autorip", 13, "Blooming Flowers", True),
+    ("speedres", 14, "Colorful Pattern", True),
+    ("rain", 15, "Heavy Rain", True),
+    ("comet", 16, "Eternal Pulse", True),
+    ("tide", 17, "Traceless Steps", True),
+    ("custom", 21, "Custom", True),
+    ("snow-blossoms", 18, "Snow Blossoms", False),
+    ("laser-beam", 19, "Laser Beam", True),
+    ("water-ripples", 20, "Water Ripples", True),
+]
+
+
+def _fallback_lighting():
+    return {
+        "hostEngine": False,
+        # Same capture set the registry entry names, so the Live Keyboard
+        # replays the board's effects even when the registry can't load.
+        "simReplay": "win68he-max",
+        "modeListSource": "static",
+        "brightnessMax": 4,
+        "speedMax": 4,
+        "brightnessMin": 0,
+        "speedMin": 0,
+        "offModeByte": 0,
+        "customModeByte": 21,
+        "modes": [
+            {"id": mid, "byte": byte, "name": name, "color": color,
+             "speed": mid not in ("static", "custom"),
+             "bg": False, "fullColor": False,
+             "direction": mid not in ("static", "custom")}
+            for mid, byte, name, color in _FALLBACK_LIGHT_MODES
+        ],
+    }
+
+
+class _FallbackWin68MaxProfile:
+    """Registry-unavailable stand-in for the WIN 68 HE MAX (same VID:PID and
+    SparkPlay capability set as its board_registry.json entry)."""
+
+    slug = "aula-win68he-max"
+    name = "Aula WIN 68 HE Max"
+    vid = 0x1CA2
+    pid = 0x1901
+    vid_pid = "0x1CA2:0x1901"
+    form_factor = "65%"
+    usage_page = 0xFFA0
+    keymap = "ui/layouts/aula-win68he-max.json"
+    protocol = "protocol_sparkplay"
+    status = "supported"
+    drivable = True
+    offered = True
+    issues = (7,)
+    lighting = _fallback_lighting()
+    capabilities = {
+        "lighting": True,
+        "actuation": True,
+        "perKeyRgb": True,
+        "rapidTrigger": True,
+        "deadzone": True,
+        "socd": True,
+        "gamepad": True,
+        "macros": True,
+        "calibration": True,
+    }
+    actuation = {
+        "deadzoneScope": "per-key",
+        "travelRange": [0.1, 3.4],
+        "rtRange": [0.01, 3.4],
+        "deadzoneRange": [0.0, 1.0],
+        "switches": [],
+    }
+
+
+def _populate_sparkplay_keymap(km, profile):
+    """Map a SparkPlay board's 126 live slots onto the UI's design codes.
+    Other boards keep the layout-file keymap exactly as boards.py loaded it."""
+    if km is not None and getattr(profile, "protocol", None) == "protocol_sparkplay":
+        protocol_sparkplay.ensure_keymap_populated(km)
+    return km
 
 
 class Api:
@@ -378,11 +480,11 @@ class Api:
                     log.info("Multiple boards connected: %s — preferring %s",
                              [p.slug for p in connected], self.board.slug)
             else:
-                self.board = reg.default
+                self.board = reg.by_slug("aula-win68he-max") or reg.default
             log.info("Active board: %s (%s)", self.board.name, self.board.vid_pid)
         except Exception as e:
-            log.warning("board registry unavailable, using Win60 defaults: %s", e)
-            self.board = None
+            log.warning("board registry unavailable, using WIN 68 HE MAX fallback: %s", e)
+            self.board = _FallbackWin68MaxProfile()
         # Reentrant so a driver read-modify-write can hold it across the whole
         # op (driver.transaction()) while the per-frame _write re-acquires it.
         self._lock = threading.RLock()
@@ -400,6 +502,7 @@ class Api:
         except Exception as e:
             self.km = None
             log.warning("keymap load failed: %s", e)
+        _populate_sparkplay_keymap(self.km, self.board)
         # Host-driven per-key effect engine (multi-color animated effects),
         # paced to the board's measured stream rate when it declares one.
         self.fx = (effects.PerKeyEffectEngine(
@@ -503,11 +606,16 @@ class Api:
             ]
         except Exception as e:
             log.warning("get_board roster failed: %s", e)
-            roster = []
+            p = _FallbackWin68MaxProfile()
+            roster = [{"slug": p.slug, "name": p.name, "vidPid": p.vid_pid,
+                       "formFactor": p.form_factor, "status": p.status,
+                       "capabilities": p.capabilities, "drivable": p.drivable,
+                       "issues": list(p.issues)}]
         b = self.board
         active = None if b is None else {
             "slug": b.slug, "name": b.name, "vidPid": b.vid_pid,
             "formFactor": b.form_factor, "status": b.status,
+            "protocol": getattr(b, "protocol", None),
             "capabilities": b.capabilities, "drivable": b.drivable,
             # per-board data blocks (registry-driven effect table, slider scales,
             # deadzone scope, switch list) so the UI can present exactly what THIS
@@ -526,7 +634,13 @@ class Api:
         try:
             reg = getattr(self, "_registry", None) or boards.load_registry()
         except Exception as e:
-            return {"ok": False, "error": str(e), "boards": []}
+            p = _FallbackWin68MaxProfile()
+            return {"ok": True, "active": p.slug,
+                    "boards": [{"slug": p.slug, "name": p.name, "vidPid": p.vid_pid,
+                                "formFactor": p.form_factor, "status": p.status,
+                                "capabilities": p.capabilities, "drivable": p.drivable,
+                                "offered": p.offered, "connected": bool(hid.enumerate(p.vid, p.pid)),
+                                "active": True}]}
         try:
             # Keyed by SLUG, not (vid, pid): several registry entries share one
             # VID:PID (the KP-TE153 ships as 2E3C:C365 like the Win60/Win68), so
@@ -562,8 +676,12 @@ class Api:
         try:
             reg = getattr(self, "_registry", None) or boards.load_registry()
         except Exception as e:
-            return {"ok": False, "error": str(e)}
-        p = reg.by_slug(str(slug))
+            if str(slug) != _FallbackWin68MaxProfile.slug:
+                return {"ok": False, "error": str(e)}
+            reg = None
+            p = _FallbackWin68MaxProfile()
+        else:
+            p = reg.by_slug(str(slug))
         if p is None:
             return {"ok": False, "error": f"unknown board: {slug}"}
         try:
@@ -593,6 +711,7 @@ class Api:
             except Exception as e:
                 self.km = None
                 log.warning("keymap load failed for %s: %s", p.slug, e)
+            _populate_sparkplay_keymap(self.km, p)
             self.fx = (effects.PerKeyEffectEngine(
                            self.km, self._send_frame,
                            max_fps=_host_engine_max_fps(p))
@@ -945,15 +1064,28 @@ class Api:
 
     # ---- lighting (fg/bg/mode/brightness/speed/dir/power, per-board dispatch) ----
     def set_light(self, mode, r, g, b, brightness=4, speed=4,
-                  bg_r=0, bg_g=0, bg_b=0, direction=0, power_on=True, full_color=0):
+                  bg_r=0, bg_g=0, bg_b=0, direction=0, power_on=True, full_color=0,
+                  palette=None, color_slot=None):
         try:
             self.driver.set_lighting(
                 int(mode), (int(r), int(g), int(b)),
                 bg=(int(bg_r), int(bg_g), int(bg_b)),
                 brightness=int(brightness), speed=int(speed),
                 direction=int(direction), full_color=int(full_color),
-                power_on=bool(power_on))
+                power_on=bool(power_on),
+                palette=palette, color_slot=color_slot)
             return {"ok": True}
+        except Exception as e:
+            return self._fail(e)
+
+    def get_lighting(self):
+        """The lighting state the KEYBOARD itself stores — for the SparkPlay
+        line that is the vendor's Color1..Color7 table plus the selected slot.
+        Boards whose driver cannot read it answer {ok: false, unsupported}."""
+        try:
+            state = dict(self.driver.get_lighting() or {})
+            state["ok"] = True
+            return state
         except Exception as e:
             return self._fail(e)
 
@@ -962,10 +1094,11 @@ class Api:
         return self.set_light(mode, r, g, b, brightness, speed)
 
     # ---- actuation / trigger ----
-    #: Trigger MODE bytes the decoded protocols accept (Win60 cmd 33 byte
-    #: sub[0], CONFIRMED-BY-CAPTURE for all three; the MINI driver maps 12/13
-    #: onto its RT flag). Anything else would program an undefined mode.
-    _TRIGGER_MODES = (0, 12, 13)
+    #: Trigger MODE bytes the decoded protocols accept: Win60 cmd-33 bytes
+    #: 0/12/13 (the MINI driver maps 12/13 onto its RT flag), plus the
+    #: SparkPlay WIN 68 HE MAX modes (1/2 fixed, 14 edge, 98/99 the vendor's
+    #: "off"/"rapid" markers). Anything else would program an undefined mode.
+    _TRIGGER_MODES = {0, 1, 2, 12, 13, 14, 98, 99}
 
     def _clamp_mm(self, range_key, mm):
         """Clamp a millimetre value to the active board's declared
@@ -1147,7 +1280,7 @@ class Api:
                      len(idxs), sorted(idxs)[:8])
             # Fixed mode carries no intervals of its own: None tells the
             # driver to keep each key's STORED RT pair (read-modify-write),
-            # which is what the vendor driver sends in mode 0.
+            # which is what the vendor drivers do in mode 0.
             self.driver.set_actuation(list(idxs), int(mode),
                                       travel * _UNIT_MM,
                                       None if i1 is None else i1 * _UNIT_MM,
@@ -1164,7 +1297,7 @@ class Api:
         if mode not in self._TRIGGER_MODES:
             return {"ok": False, "error": f"invalid trigger mode {mode}"}
         travel_mm = self._clamp_mm("travelRange", travel_mm)
-        if mode != 0:
+        if mode not in (0, 98, 99):
             # RT sensitivities are only meaningful (and only range-checked)
             # in a rapid-trigger mode.
             rt_press_mm = self._clamp_mm("rtRange", rt_press_mm)
@@ -1174,11 +1307,11 @@ class Api:
                    _mm_to_raw(rt_press_mm),
                    _mm_to_raw(rt_release_mm))
         else:
-            # Fixed mode: the UI sends 0/0, but the vendor driver never
+            # Fixed/off mode: the UI sends 0/0, but the vendor driver never
             # writes zero intervals — it re-sends each key's stored pair
             # (CONFIRMED-BY-CAPTURE frame 1842). None = "keep stored"; the
             # driver reads the pair back and preserves it per key.
-            cfg = (0, _mm_to_raw(travel_mm), None, None)
+            cfg = (mode, _mm_to_raw(travel_mm), None, None)
         for i in idxs:
             self._trigger_state[i] = cfg
         try:
@@ -1240,21 +1373,29 @@ class Api:
             return self._fail(e)
 
     def set_custom_colors(self, colors_by_code, brightness=4, speed=4):
-        """colors_by_code: {design_code: [r,g,b]} for per-key custom RGB."""
+        """colors_by_code: {design_code: [r,g,b]} for per-key custom RGB.
+
+        The map is the COMPLETE Custom picture, not a patch: keys it does not
+        name are written black. That is the Win60 slot's documented absolute
+        write, and it is what the other engines need too — the SparkPlay KRGB
+        buffer and the MINI's cumulative table would otherwise leave a key the
+        user just reset lit with its old colour. An empty map is therefore
+        "Custom mode, whole board off", not an error.
+        """
         if not self.km:
             return {"ok": False, "error": "no keymap"}
-        colors_by_index = {}
+        colors_by_index = {int(i): (0, 0, 0) for i in self.km.indices()}
+        painted = 0
         for code, rgb in (colors_by_code or {}).items():
             idx = self.km.index_of_code.get(code)
             if idx is not None and rgb and len(rgb) >= 3:
-                colors_by_index[idx] = tuple(int(c) for c in rgb[:3])
-        if not colors_by_index:
-            return {"ok": False, "error": "no colors"}
+                colors_by_index[int(idx)] = tuple(int(c) for c in rgb[:3])
+                painted += 1
         try:
             self.driver.set_per_key_rgb(colors_by_index,
                                         brightness=int(brightness),
                                         speed=int(speed))
-            return {"ok": True, "keys": len(colors_by_index)}
+            return {"ok": True, "keys": painted}
         except Exception as e:
             return self._fail(e)
 
@@ -1425,7 +1566,12 @@ class Api:
                 key2_hid = self.km.hid_for_code(p["key2"])
                 if not key1_hid or not key2_hid:
                     return {"ok": False, "error": f"unknown SOCD key: {p}"}
-                plist.append({"model": int(p["model"]), "key1_hid": key1_hid, "key2_hid": key2_hid})
+                plist.append({"model": int(p["model"]), "key1_hid": key1_hid,
+                              "key2_hid": key2_hid,
+                              "bind": int(p.get("bind", 0)),
+                              "delay": int(p.get("delay", 0)),
+                              "val1_hid": self.km.hid_for_code(p["val1"]) if p.get("val1") else 0,
+                              "val2_hid": self.km.hid_for_code(p["val2"]) if p.get("val2") else 0})
             self.driver.set_socd(plist)
             return {"ok": True}
         except Exception as e:
@@ -2043,22 +2189,31 @@ class Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    # ---- updates (GitHub Releases, cross-platform) ----
+    # ---- updates (offline in this build) ----
     def app_version(self):
         import version
-        return {"ok": True, "version": version.__version__, "kind": updater.platform_kind()}
+        return {"ok": True, "version": version.__version__,
+                "kind": updater.platform_kind(),
+                "updates": not UPDATES_DISABLED}
 
     def check_update(self):
-        """Ask GitHub for the latest release and whether it's newer than us."""
+        """Ask GitHub for the latest release (disabled here: no network)."""
+        if UPDATES_DISABLED:
+            return {"ok": True, "disabled": True, "update": False}
         return updater.check_for_update()
 
     def get_auto_update(self):
         """Auto-update-on-launch preference. `autoUpdate` is None when never set
-        (first run), else a bool. The UI uses None to show the first-run prompt."""
+        (first run), else a bool. This build reports False so even a cached
+        runtime with the old launch flow will not check or download anything."""
+        if UPDATES_DISABLED:
+            return {"ok": True, "autoUpdate": False, "disabled": True}
         return {"ok": True, "autoUpdate": updater.get_auto_update(self._settings_path())}
 
     def set_auto_update(self, on):
-        """Persist the auto-update-on-launch preference (merged into settings.json)."""
+        """Persist the auto-update-on-launch preference (disabled in this build)."""
+        if UPDATES_DISABLED:
+            return {"ok": True, "autoUpdate": False, "disabled": True}
         try:
             val = updater.set_auto_update(self._settings_path(), bool(on))
             return {"ok": True, "autoUpdate": val}
@@ -2066,17 +2221,20 @@ class Api:
             return {"ok": False, "error": str(e)}
 
     def update_progress(self):
-        """Download progress for the in-flight update: {phase, done, total, pct}.
-        Polled by the UI while apply_update() runs — the installer asset is ~20 MB,
-        and without this the window looks frozen for the whole download."""
+        """Download progress for an in-flight update (none can start here)."""
+        if UPDATES_DISABLED:
+            return {"ok": True, "disabled": True, "phase": "idle",
+                    "done": 0, "total": 0, "pct": 0}
         return {"ok": True, **updater.get_progress()}
 
     def apply_update(self, asset_url, asset_name=None, asset_size=None, asset_sha256=None):
-        """Download + install the update for this OS. On success the caller
-        should quit (Windows) or prompt a restart (Flatpak).
+        """Download + install an update (disabled in this build).
 
-        asset_size/asset_sha256 come from check_update(); updater re-fetches them
-        if omitted, so the download is verified either way."""
+        Returning before updater.apply_update() means nothing is downloaded
+        and the Windows installer/quit path below is never reached."""
+        if UPDATES_DISABLED:
+            return {"ok": False, "disabled": True,
+                    "error": "Updates are disabled in this build — Aether does not download from GitHub."}
         res = updater.apply_update(asset_url, asset_name, asset_size, asset_sha256)
         if res.get("ok") and res.get("quit"):
             # Let the bridge return first, then exit so the installer can replace
@@ -2220,17 +2378,17 @@ class Api:
         polls this to mirror the live animation. {} when no host effect is running."""
         if not self.fx or not self.fx.is_running():
             return {}
-            
-        idx2code = getattr(self, '_idx2code', None)
-        if idx2code is None:
-            self._idx2code = idx2code = {v: k for k, v in self.km.index_of_code.items()}
-            
         out = {}
-        # Iterate over the dict directly (thread-safe since fx engine swaps it atomically)
-        for idx, rgb in self.fx.last_frame.items():
-            code = idx2code.get(idx)
-            if code:
-                out[code] = rgb
+        for idx, rgb in list(self.fx.last_frame.items()):
+            # SparkPlay slots carry several UI code aliases per key ("Esc",
+            # "Escape", "1", "Digit1", ...); emit all of them so whichever
+            # spelling the board's layout uses finds its colour.
+            for a in protocol_sparkplay.AULA_WIN68_ALIASES.get(idx, ()):
+                out[a] = rgb
+            if self.km and idx in self.km.by_index:
+                c = self.km.by_index[idx].get("code")
+                if c:
+                    out[c] = rgb
         return out
 
     def start_multicolor(self, pattern, colors, bg=(0, 0, 0), brightness=80,

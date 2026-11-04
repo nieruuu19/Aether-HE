@@ -90,7 +90,8 @@ class Win60Driver(BoardDriver):
         return b, s
 
     def set_lighting(self, mode, fg, bg=(0, 0, 0), brightness=4, speed=4,
-                     direction=0, full_color=0, power_on=True):
+                     direction=0, full_color=0, power_on=True,
+                     palette=None, color_slot=None):
         brightness, speed = self._clamp_light(brightness, speed)
         self._write(protocol.build_light(
             int(mode), brightness, speed,

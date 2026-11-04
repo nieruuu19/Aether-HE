@@ -175,7 +175,10 @@ class BoardDriver:
         self._unsupported("device_info")
 
     def set_lighting(self, mode, fg, bg=(0, 0, 0), brightness=4, speed=4,
-                     direction=0, full_color=0, power_on=True):
+                     direction=0, full_color=0, power_on=True,
+                     palette=None, color_slot=None):
+        """palette/color_slot address a board-STORED colour table (the
+        SparkPlay line's Color1..Color7); boards without one ignore them."""
         self._unsupported("lighting")
 
     def get_lighting(self):

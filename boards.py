@@ -41,8 +41,10 @@ A `BoardProfile` carries everything the rest of the app needs to talk to a board
   * actuation       — OPTIONAL per-board actuation facts: deadzoneScope
                       ("per-key" | "global" — a board whose dead zones live in a
                       global config table must NOT get a per-key dead-zone UI),
-                      travel/RT/dead-zone ranges in mm, and the board's
-                      switch/axis profile list. None when not declared.
+                      travel/RT/dead-zone ranges in mm, the board's switch/axis
+                      profile list, and `defaultSwitch` (the switch the board
+                      ships with; keys whose stored L_AXIS is 0 run this one).
+                      None when not declared.
 
 The registry is validated on load (fail-closed): VID/PID must parse, slugs must
 be unique, the named `default` must exist, capability values must be
@@ -215,6 +217,12 @@ def _validate_lighting(slug, d):
         if d.get(key) is not None:
             out[key] = _int_field(f"{slug}.lighting.{key}", d.get(key), 0, 255)
     out["hostEngine"] = _bool_field(f"{slug}.lighting.hostEngine", d.get("hostEngine", False))
+    if d.get("simReplay") is not None:
+        # Opt-in: the Live Keyboard may replay captured frames for boards whose
+        # firmware exposes no per-key RGB. The value names the capture set the
+        # UI carries (ui/runtime_src/src/fx_replay.js) — only add it once that
+        # set was recorded off this actual board.
+        out["simReplay"] = _str_field(f"{slug}.lighting.simReplay", d.get("simReplay"))
     modes = d.get("modes")
     if not isinstance(modes, list) or not modes:
         raise BoardRegistryError(f"{slug}.lighting.modes must be a non-empty array")
@@ -271,6 +279,14 @@ def _validate_actuation(slug, d):
                 _int_field(f"{slug}.actuation.switches[{i}].code", s.get("code"), 0, 255)
             switches.append(dict(s))   # keep display metadata (maker, travel, ...) as-is
         out["switches"] = switches
+    ds = d.get("defaultSwitch")
+    if ds is not None:
+        _str_field(f"{slug}.actuation.defaultSwitch", ds)
+        ids = {s.get("id") for s in (sw or []) if isinstance(s, dict)}
+        if ds not in ids:
+            raise BoardRegistryError(
+                f"{slug}.actuation.defaultSwitch {ds!r} is not one of actuation.switches")
+        out["defaultSwitch"] = ds
     return out
 
 

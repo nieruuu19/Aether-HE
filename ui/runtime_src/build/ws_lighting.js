@@ -140,6 +140,30 @@
   const PRESET_PALETTES = [["#9d4edd"], ["#00f5ff"], ["#ff3d6e"], ["#39ff8a"], ["#9d4edd", "#00f5ff"], ["#ff7a59", "#ffaa1f"], ["#ff3d6e", "#ffaa1f", "#39ff8a"], ["#ff3d6e", "#ffaa1f", "#39ff8a", "#3b82f6"]];
   const BG_SWATCHES = ["#000000", "#0b0f19", "#1a0833", "#001318", "#0a1f10", "#241400", "#2a0814", "#ffffff"];
 
+  /* Firmware boards store exactly seven effect colours (the vendor's Color1..7),
+     so anything past those lives host-side: a saved-colour library that can grow,
+     be edited and be reset, and one click copies a saved colour into the slot the
+     effect is using. DEFAULT_BOARD_COLORS is the table the SparkPlay line ships
+     with (read off the Win68 HE Max and matching the vendor's default tiles),
+     written back by the palette's Reset action. */
+  const DEFAULT_BOARD_COLORS = ["#ff0000", "#00ff00", "#7f7f00", "#0000ff", "#7f007f", "#007f7f", "#7f7f7f"];
+  const DEFAULT_SAVED_COLORS = ["#ff0040", "#ff6a00", "#ffcc00", "#7dff3a", "#00e08a", "#00c8ff", "#2b6bff", "#8c4dff", "#ff2d95", "#ffffff", "#ffb38a"];
+  const SAVED_COLORS_CAP = 18;
+  const isHexColor = c => typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c);
+  const savedColorsKey = slug => `aether-saved-colors:${slug || "default"}`;
+  const loadSavedColors = slug => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(savedColorsKey(slug)));
+      if (Array.isArray(raw)) return raw.filter(isHexColor).slice(0, SAVED_COLORS_CAP);
+    } catch {}
+    return [...DEFAULT_SAVED_COLORS];
+  };
+  const storeSavedColors = (slug, list) => {
+    try {
+      localStorage.setItem(savedColorsKey(slug), JSON.stringify(list));
+    } catch {}
+  };
+
   /* ============================================================
      Board-awareness helpers (additive — PER_BOARD_PARITY_PLAN step 5).
      Every helper falls back to today's hardcoded behaviour when the board
@@ -292,6 +316,17 @@
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
     return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
   };
+  /* Tiny labels sit on the swatch itself, so pick ink that survives it: orange,
+     green, yellow and cyan are too bright for white (the factory slots 2-5);
+     red, blue and purple keep the vendor's white. */
+  const needsDarkInk = hex => {
+    const ch = v => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const [r, g, b] = hexToRgb(hex);
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b) > 0.3;
+  };
   const briByteFor = (pct, max) => pct <= 0 ? 0 : Math.max(1, Math.min(max, Math.ceil(pct / 100 * max)));
   const spdByteFor = (pct, max) => Math.max(1, Math.min(max, Math.round(pct / 100 * (max - 1)) + 1));
 
@@ -362,13 +397,21 @@
     }
     const briMax = bl.brightnessMax || 4;
     const spdMax = bl.speedMax || 4;
-    const [r, g, b] = hexToRgb(s.colors && s.colors[0] || "#ffffff");
+    // Firmware-only boards carry the vendor's stored 7-colour table: the chosen
+    // slot is the effect colour and the whole table rides along so a slot the
+    // user just recoloured is written to the keyboard (Color1..Color7).
+    const firmwareOnly = bl.hostEngine === false;
+    const slots = firmwareOnly ? (s.colors || []).slice(0, 7) : [];
+    const slot = firmwareOnly ? Math.max(0, Math.min(6, s.colorSlot | 0)) : 0;
+    const [r, g, b] = hexToRgb(firmwareOnly ? slots[slot] || slots[0] || "#ffffff" : s.colors && s.colors[0] || "#ffffff");
     const [br, bg2, bb] = hexToRgb(s.bgColor);
     // 2-way direction rule (registry `direction: true`): the firmware takes a
     // plain 0/1 byte, so clamp the 4-way dial value. Directional *kinds*
     // ("lr"/"all"/...) and rule-less modes pass the dial byte through untouched
     // (the Win60's rules are all kinds or absent -> byte-identical).
     const dirOut = d.rule && d.rule.direction === true ? s.direction === 1 ? 1 : 0 : s.direction;
+    const lightCall = ["set_light", d.byte, r, g, b, briByteFor(s.brightness, briMax), spdByteFor(s.speed, spdMax), br, bg2, bb, dirOut, s.power, s.fullColor ? 1 : 0];
+    if (firmwareOnly) lightCall.push(slots.map(hexToRgb), slot);
     return {
       dispatch: d,
       // Only the powered, non-Full-RGB substitution is worth saying out loud:
@@ -376,7 +419,7 @@
       // host-only id has always quietly used the static slot (Win60 shipped
       // behaviour — keep it silent there too).
       notice: d.fallback && s.power && !s.fullColor ? `${d.reason} — showing ${d.rule && d.rule.name || "Static"} instead` : null,
-      calls: [["stop_multicolor"], ["set_light", d.byte, r, g, b, briByteFor(s.brightness, briMax), spdByteFor(s.speed, spdMax), br, bg2, bb, dirOut, s.power, s.fullColor ? 1 : 0]]
+      calls: [["stop_multicolor"], lightCall]
     };
   };
 
@@ -408,15 +451,193 @@
      hostEngine:false board — never for static/custom. */
   const previewSimColor = (bl, s, idx) => {
     const colors = s.colors || [];
+    /* "Colorful" is the board's own full-spectrum entry (static slot 7,
+       dynamic colour id 0) — the firmware picks the hues, so mirror a rainbow. */
+    if (s.fullColor) {
+      return ["#ff0040", "#ff8a00", "#ffd400", "#1eff7a", "#00b7ff", "#9d4edd"][idx % 6];
+    }
     if (s.pattern === "static") return colors[0];
     const rule = modeRuleFor(bl, s.pattern);
     const legacyId = LIGHT_MODES.some(m => m.id === s.pattern);
     if (rule && s.pattern !== "custom" && (!legacyId || bl.hostEngine === false)) {
-      if (rule.color === false) return s.bgColor; // firmware-chosen colors — show only the user's bg
-      return idx % 6 === 0 ? colors[0] || "#ffffff" : s.bgColor; // exactly the fg byte sent (buildLightCalls)
+      // `bg: false` means the firmware has no backdrop layer at all (the
+      // SparkPlay boards): paint the gaps black, not a color the board cannot
+      // show — the background picker is hidden for exactly these modes.
+      const bg = rule.bg === false ? "#000000" : s.bgColor;
+      if (rule.color === false) return bg; // firmware-chosen colors — show only the user's bg
+      // `colorSlot` is the stored-table entry buildLightCalls sends as fg.
+      const fg = colors[Math.max(0, Math.min(6, s.colorSlot | 0))] || colors[0] || "#ffffff";
+      return idx % 6 === 0 ? fg : bg;
     }
     const hit = idx % 6 === 0 || colors.length === 1;
     return hit ? colors[idx % colors.length] : s.bgColor;
+  };
+
+  /* ============================================================
+     Firmware effect replay for the Live Keyboard.
+  
+     SparkPlay boards render dynamic effects on the keyboard itself and expose
+     no per-key RGB, so get_light_frame is empty while one runs and the live
+     keyboard used to go still. The tables below replay what the board really
+     shows: every key's hue and brightness were sampled off 10 s camera
+     captures of the board running each effect with no input, at speed 3 and
+     brightness 4. Playback interpolates between phases, so the motion, band
+     width and hue order are the board's own, not a formula's guess.
+  
+     Bytes 17-20 (Traceless Steps, Snow Blossoms, Laser Beam, Water Ripples)
+     only light up while a key is pressed, so they replay as the dark board
+     they are when idle and the widget says why.
+  
+     HONESTY: sampled through a camera, so the hues carry a little sensor
+     bloom; the values are our own, not a readback from the board.
+     ============================================================ */
+
+  let _fxTabs = null;
+  const fxTables = () => {
+    if (_fxTabs) return _fxTabs;
+    const R = window.AetherFXReplay;
+    const tabs = {};
+    if (R && R.modes && typeof atob === "function") {
+      const dec = b64 => {
+        const s = atob(b64);
+        const a = new Uint8Array(s.length);
+        for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+        return a;
+      };
+      for (const k in R.modes) {
+        const m = R.modes[k];
+        tabs[k | 0] = {
+          sec: m.sec,
+          n: m.n,
+          pp: !!m.pp,
+          c: dec(m.c),
+          s: dec(m.s)
+        };
+      }
+    }
+    return _fxTabs = {
+      id: R && R.id || null,
+      keys: R && R.keys || 0,
+      tabs
+    };
+  };
+
+  /* Reverse a key index inside its own row: the board's 2-way direction byte
+     mirrors the flow, so the replay is read right-to-left instead. */
+  let _kbMirror = null,
+    _kbMirrorRows = null;
+  const keyMirror = () => {
+    const rows = window.AetherKeyboard && window.AetherKeyboard.KB_ROWS || null;
+    if (!Array.isArray(rows) || !rows.length) return null;
+    if (_kbMirror && _kbMirrorRows === rows) return _kbMirror;
+    const rev = [];
+    let i = 0;
+    rows.forEach(row => {
+      for (let j = 0; j < row.length; j++) rev[i + j] = i + (row.length - 1 - j);
+      i += row.length;
+    });
+    _kbMirror = rev;
+    _kbMirrorRows = rows;
+    return rev;
+  };
+  const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const hsvHex = (hDeg, sat, val) => {
+    const v = clamp01(val);
+    const h = (hDeg % 360 + 360) % 360 / 60;
+    const c = v * sat;
+    const x = c * (1 - Math.abs(h % 2 - 1));
+    const m = v - c;
+    let r = 0,
+      g = 0,
+      b = 0;
+    if (h < 1) {
+      r = c;
+      g = x;
+    } else if (h < 2) {
+      r = x;
+      g = c;
+    } else if (h < 3) {
+      g = c;
+      b = x;
+    } else if (h < 4) {
+      g = x;
+      b = c;
+    } else if (h < 5) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    const h2 = v2 => Math.round(clamp01(v2 + m) * 255).toString(16).padStart(2, "0");
+    return `#${h2(r)}${h2(g)}${h2(b)}`;
+  };
+  const scaleHex = (hex, k) => {
+    const [r, g, b] = hexToRgb(hex);
+    const f = clamp01(k);
+    const h2 = v => Math.round(v * f).toString(16).padStart(2, "0");
+    return `#${h2(r)}${h2(g)}${h2(b)}`;
+  };
+
+  /* firmwareSimFrame(bl, s, codes, t) -> {code: "#rrggbb"} | null.
+     null means "this is not an animated firmware effect" — the caller keeps the
+     static schematic (host-engine boards, static, custom, disconnected).
+     s: { pattern, colors, colorSlot, brightness, speed, direction, fullColor }. */
+  const firmwareSimFrame = (bl, s, codes, t) => {
+    if (!bl || bl.hostEngine !== false) return null;
+    if (!codes || !codes.length) return null;
+    if (s.pattern === "static" || s.pattern === "custom") return null;
+    const rule = modeRuleFor(bl, s.pattern);
+    if (!rule || !(rule.byte >= 1 && rule.byte <= 20)) return null;
+    const out = {};
+    /* 17-20 are press-reactive: idle, the board is simply dark. */
+    if (rule.byte >= 17) {
+      for (let i = 0; i < codes.length; i++) out[codes[i]] = "#000000";
+      return out;
+    }
+    if (t == null) return null;
+    const F = fxTables();
+    const tab = F.id && bl.simReplay === F.id ? F.tabs[rule.byte] : null;
+    if (!tab || !tab.n || !F.keys) return null;
+    const n = tab.n,
+      nk = F.keys;
+    const spd = spdByteFor(s.speed == null ? 60 : s.speed, bl.speedMax || 4);
+    const rate = Math.max(0.25, 1 + (spd - 3) * 0.35);
+    const bri = briByteFor(s.brightness == null ? 100 : s.brightness, bl.brightnessMax || 4);
+    const lum = [0, 0.14, 0.34, 0.65, 1][bri] == null ? 1 : [0, 0.14, 0.34, 0.65, 1][bri];
+    const full = !!s.fullColor;
+    const colors = s.colors || [];
+    const base = colors[Math.max(0, Math.min(6, s.colorSlot | 0))] || colors[0] || "#ffffff";
+    const rev = (s.direction | 0) === 1 ? keyMirror() : null;
+    // Clips that never repeat are played forward then back: their last phase has
+    // nothing to do with their first, and wrapping straight to it snapped the
+    // whole board every few seconds.
+    const span = tab.pp ? 2 * n : n;
+    let ph = t * rate / tab.sec * n % span;
+    if (tab.pp && ph >= n) ph = 2 * n - ph;
+    const i0 = Math.min(Math.floor(ph), n - 1);
+    const i1 = tab.pp ? Math.min(i0 + 1, n - 1) : (i0 + 1) % n;
+    const fr = ph - Math.floor(ph);
+    for (let i = 0; i < codes.length && i < nk; i++) {
+      const j = rev && rev[i] != null ? rev[i] : i;
+      let k;
+      if (full) {
+        const a0 = tab.c[(i0 * nk + j) * 2],
+          v0 = tab.c[(i0 * nk + j) * 2 + 1];
+        const a1 = tab.c[(i1 * nk + j) * 2],
+          v1 = tab.c[(i1 * nk + j) * 2 + 1];
+        const dh = (a1 - a0 + 384) % 256 - 128;
+        const hb = (a0 + dh * fr + 256) % 256;
+        k = clamp01((v0 + (v1 - v0) * fr) / 255 * lum);
+        out[codes[i]] = k <= 0.02 ? "#000000" : hsvHex(hb * 360 / 255, 1, k);
+      } else {
+        const v0 = tab.s[i0 * nk + j],
+          v1 = tab.s[i1 * nk + j];
+        k = clamp01((v0 + (v1 - v0) * fr) / 255 * lum);
+        out[codes[i]] = k <= 0.02 ? "#000000" : scaleHex(base, k);
+      }
+    }
+    return out;
   };
 
   /* PatternPreview — verbatim from sections.jsx (real RGB color prop). */
@@ -477,7 +698,16 @@
     rx: "3",
     fill: color,
     opacity: "0.5"
-  }), kind === "rain" && Array.from({
+  }), kind === "spectrum" && ["#ff0040", "#ff8a00", "#ffd400", "#1eff7a", "#00b7ff", "#9d4edd"].map((c, i) => /*#__PURE__*/React.createElement("rect", {
+    key: i,
+    x: i * 13 + 2,
+    y: 6,
+    width: "10",
+    height: "18",
+    rx: "2",
+    fill: c,
+    opacity: "0.85"
+  })), kind === "rain" && Array.from({
     length: 6
   }).map((_, i) => /*#__PURE__*/React.createElement("line", {
     key: i,
@@ -747,8 +977,6 @@
       striOrient,
       setStriOrient
     } = ctx;
-    const fullColorOk = pattern !== "static" && pattern !== "custom";
-
     /* Board awareness (additive). firmwareOnly === false for the Win60 (its
        registry sets hostEngine true) and whenever no board data is available,
        so every branch below falls back to today's exact rendering. */
@@ -758,6 +986,11 @@
     const modeGrid = modeGridFor(bl);
     const firmwareOnly = !!bl && bl.hostEngine === false;
     const rule = firmwareOnly ? modeRuleFor(bl, pattern) : null;
+    /* Full RGB is a firmware capability, so a firmware-only board answers from
+       its registry rule (`fullColor`): the SparkPlay table offers the rainbow
+       slot for static and all 20 effects alike. Host-engine boards keep the
+       shipped rule — static/custom are the two that never stream rainbow. */
+    const fullColorOk = firmwareOnly ? !!(rule && rule.fullColor) : pattern !== "static" && pattern !== "custom";
     // A host-engine board's OWN firmware mode beyond the legacy grid (e.g. the
     // MINI's starry-sky): its registry rule drives the direction control below.
     // null for every legacy grid id and whenever there is no board data, so the
@@ -927,6 +1160,12 @@
     } = ctx;
     const palette = colors || [];
     const [activeSlot, setActiveSlot] = useState(0);
+    /* The vendor colour UI (magnet.aulastar.com) is the keyboard's own table:
+       Color1..Color7 plus "colorful". `colorSlot` is the slot the effect uses;
+       `fullColor` is the colorful/full-spectrum entry. */
+    const colorSlot = Math.max(0, Math.min(6, ctx.colorSlot | 0));
+    const setColorSlot = ctx.setColorSlot || (() => {});
+    const setFullColor = ctx.setFullColor || (() => {});
     // Draft for the bg hex text field: lets the user type intermediate values
     // without committing an invalid color (which would stream black to the
     // device). Only a full valid #RRGGBB is pushed to bgColor; external changes
@@ -943,6 +1182,45 @@
     const boardName = bctx.board && bctx.board.name || "this board";
     const colorRule = modeRuleFor(bctx.lighting, pattern);
     const colorLocked = !!(colorRule && colorRule.color === false);
+    /* A firmware-only board's effect command carries exactly ONE foreground
+       color and no background field at all, so the shared 4-slot palette and
+       the background picker would promise controls that never reach the board.
+       Both stay exactly as shipped on host-engine boards (their rules declare
+       bg: true / no rule at all), and win/lose nothing where the board data is
+       absent (fail-open). */
+    const firmwareOnly = !!(bctx.lighting && bctx.lighting.hostEngine === false);
+    const bgSupported = !(colorRule && colorRule.bg === false);
+
+    /* Saved-colour library + slot editor state. Kept at the top because these
+       hooks must run on every board/mode, while the vendor-parity UI below is
+       only rendered for firmware boards. Scoped per board slug so one keyboard's
+       library never leaks into another's. */
+    const boardSlug = bctx.board && bctx.board.slug || null;
+    const [savedColors, setSavedColors] = useState(() => loadSavedColors(boardSlug));
+    const savedColorsSlug = useRef(boardSlug);
+    useEffect(() => {
+      if (savedColorsSlug.current === boardSlug) return;
+      savedColorsSlug.current = boardSlug;
+      setSavedColors(loadSavedColors(boardSlug));
+    }, [boardSlug]);
+    const commitSaved = next => {
+      setSavedColors(next);
+      storeSavedColors(boardSlug, next);
+    };
+    // Draft for the slot hex field — same rule as bgText: only a complete
+    // #RRGGBB reaches the board, so typing "#f" cannot flash black.
+    const slotHex = palette[colorSlot] || "#000000";
+    const [slotText, setSlotText] = useState(slotHex);
+    useEffect(() => {
+      setSlotText(slotHex);
+    }, [slotHex]);
+    // Two-step confirm for the destructive resets (both rewrite board colours).
+    const [resetArm, setResetArm] = useState(null);
+    useEffect(() => {
+      if (!resetArm) return;
+      const t = setTimeout(() => setResetArm(null), 3500);
+      return () => clearTimeout(t);
+    }, [resetArm]);
     const setSlot = (i, value) => {
       const p = [...palette];
       p[i] = value;
@@ -962,10 +1240,203 @@
       if (activeSlot >= p.length) setActiveSlot(p.length - 1);
     };
     return /*#__PURE__*/React.createElement("div", {
-      className: "flex flex-col gap-4"
+      className: "flex flex-col gap-3"
     }, pattern !== "custom" && colorLocked ? /*#__PURE__*/React.createElement("div", {
       className: "font-mono text-[11px] text-[var(--text-faint)] leading-relaxed"
-    }, "\"", colorRule && colorRule.name || pattern, "\" uses firmware-forced random colors on", " ", boardName, " \u2014 the effect color picker does not apply while it is active. The other controls still work.") : pattern !== "custom" ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    }, "\"", colorRule && colorRule.name || pattern, "\" uses firmware-forced random colors on", " ", boardName, " \u2014 the effect color picker does not apply while it is active. The other controls still work.") : pattern !== "custom" ? firmwareOnly ? (() => {
+      /* Vendor-parity palette: the seven colours stored ON the keyboard, the
+         slot the effect is using, and the full-spectrum ("colorful") entry.
+         Recolouring a slot writes that slot to the board; picking a slot is
+         exactly what the vendor's changeDynamicLightColor(index) does. */
+      const slots = Array.from({
+        length: 7
+      }, (_, i) => palette[i] || "#000000");
+      const cur = slots[colorSlot];
+      const colorful = !!ctx.fullColor;
+      /* Vendor layout: STATIC is a 3-wide Color1..Color7 list closed by a
+         plain "colorful" button; DYNAMIC "Color Setting" is a 4-wide grid
+         led by the full-spectrum swatch, then the same seven colours. */
+      const staticTab = pattern === "static";
+      const colorfulOk = !!(colorRule && colorRule.fullColor !== false);
+      const editSlot = value => {
+        const p = [...slots];
+        p[colorSlot] = value;
+        setColors(p);
+        setFullColor(false);
+      };
+      const slotTile = (c, i) => {
+        const on = !colorful && colorSlot === i;
+        const lightSwatch = needsDarkInk(c);
+        const ink = lightSwatch ? "#0b0b0f" : "#ffffff";
+        const inkShadow = lightSwatch ? "none" : "0 1px 3px rgba(0,0,0,0.7)";
+        return /*#__PURE__*/React.createElement("button", {
+          key: i,
+          onClick: () => {
+            setFullColor(false);
+            setColorSlot(i);
+          },
+          className: `relative h-12 rounded-xl overflow-hidden transition-all ring-1
+                          ${on ? `ring-2 ${lightSwatch ? "ring-black/70" : "ring-white/85"} scale-[1.02]` : "ring-white/10 hover:scale-[1.01]"}`,
+          style: {
+            background: c,
+            boxShadow: `0 0 18px ${c}55`
+          }
+        }, /*#__PURE__*/React.createElement("span", {
+          className: "absolute top-1 left-1.5 font-mono text-[9px]",
+          style: {
+            color: ink,
+            opacity: 0.88,
+            textShadow: inkShadow
+          }
+        }, "Color", i + 1), /*#__PURE__*/React.createElement("span", {
+          className: "absolute bottom-1 left-1.5 font-mono text-[9px]",
+          style: {
+            color: ink,
+            opacity: 0.75,
+            textShadow: inkShadow
+          }
+        }, c.toUpperCase()));
+      };
+      const colorfulTile = staticTab ? /*#__PURE__*/React.createElement("button", {
+        key: "colorful",
+        onClick: () => setFullColor(true),
+        className: `h-12 rounded-xl transition-all ring-1 bg-white/[0.03]
+                        ${colorful ? "ring-2 ring-white/85 scale-[1.02]" : "ring-white/10 hover:ring-white/25 hover:scale-[1.01]"}`
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "font-mono text-[9px] text-[var(--text-dim)]"
+      }, "Colorful")) : /*#__PURE__*/React.createElement("button", {
+        key: "colorful",
+        onClick: () => setFullColor(true),
+        className: `relative h-12 rounded-xl overflow-hidden transition-all ring-1
+                        ${colorful ? "ring-2 ring-white/85 scale-[1.02]" : "ring-white/10 hover:scale-[1.01]"}`,
+        style: {
+          background: "linear-gradient(90deg,#ff0040,#ff8a00,#ffd400,#1eff7a,#00b7ff,#9d4edd)",
+          boxShadow: "0 0 18px rgba(157,78,221,0.35)"
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "absolute top-1 left-1.5 font-mono text-[9px] text-white/90",
+        style: {
+          textShadow: "0 1px 3px rgba(0,0,0,0.7)"
+        }
+      }, "Colorful"));
+      const tiles = staticTab ? slots.map(slotTile).concat(colorfulOk ? [colorfulTile] : []) : (colorfulOk ? [colorfulTile] : []).concat(slots.map(slotTile));
+      const resetBoard = () => {
+        if (resetArm !== "board") {
+          setResetArm("board");
+          return;
+        }
+        setResetArm(null);
+        setColors([...DEFAULT_BOARD_COLORS]);
+        setFullColor(false);
+      };
+      const resetSaved = () => {
+        if (resetArm !== "saved") {
+          setResetArm("saved");
+          return;
+        }
+        setResetArm(null);
+        commitSaved([...DEFAULT_SAVED_COLORS]);
+      };
+      const addSaved = value => {
+        if (savedColors.length >= SAVED_COLORS_CAP) return;
+        commitSaved([...savedColors, value]);
+      };
+      const editSaved = (i, value) => commitSaved(savedColors.map((c, j) => j === i ? value : c));
+      const removeSaved = i => commitSaved(savedColors.filter((_, j) => j !== i));
+      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-baseline justify-between mb-2"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "font-display text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]"
+      }, "Effect colors"), /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-3"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "font-mono text-[10px] text-[var(--text-faint)]"
+      }, "stored on the keyboard"), /*#__PURE__*/React.createElement("button", {
+        onClick: resetBoard,
+        title: "Write the seven default colours back to the keyboard",
+        className: `font-mono text-[10px] uppercase tracking-[0.16em] transition-colors
+                            ${resetArm === "board" ? "text-amber-300" : "text-[var(--text-dim)] hover:text-white"}`
+      }, resetArm === "board" ? "Confirm reset" : "Reset"))), /*#__PURE__*/React.createElement("div", {
+        className: `grid gap-2 ${staticTab ? "grid-cols-3" : "grid-cols-4"}`
+      }, tiles), /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-2 mt-2"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "relative w-11 h-9 rounded-lg overflow-hidden ring-1 ring-white/10 shrink-0",
+        style: {
+          background: cur,
+          boxShadow: `0 0 14px ${cur}55`
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "color",
+        value: cur,
+        onChange: e => editSlot(e.target.value),
+        title: `Recolor Color${colorSlot + 1}`,
+        className: "absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+      })), /*#__PURE__*/React.createElement("input", {
+        type: "text",
+        value: (slotText || "").toUpperCase(),
+        maxLength: 7,
+        onChange: e => {
+          const v = e.target.value;
+          setSlotText(v);
+          if (isHexColor(v)) editSlot(v);
+        },
+        className: "w-[104px] h-9 px-2.5 rounded-lg bg-[rgba(5,11,14,0.5)] border border-[var(--line)] font-mono text-[12px] text-[var(--text)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
+      }), /*#__PURE__*/React.createElement("button", {
+        onClick: () => editSlot("#000000"),
+        title: "Set this slot to black",
+        className: "px-2.5 h-9 rounded-lg border border-[var(--line)] bg-white/[0.02] font-display text-[10.5px] uppercase tracking-[0.16em] text-[var(--text-dim)] hover:text-white hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)]"
+      }, "Clear"), /*#__PURE__*/React.createElement("span", {
+        className: "ml-auto font-mono text-[10.5px] text-[var(--text-dim)]"
+      }, "Color", colorSlot + 1)), /*#__PURE__*/React.createElement("div", {
+        className: "mt-2"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-baseline justify-between mb-1.5"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "font-display text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]"
+      }, "Saved colors \xB7 ", savedColors.length), /*#__PURE__*/React.createElement("button", {
+        onClick: resetSaved,
+        title: "Restore the default saved colours",
+        className: `font-mono text-[10px] uppercase tracking-[0.16em] transition-colors
+                            ${resetArm === "saved" ? "text-amber-300" : "text-[var(--text-dim)] hover:text-white"}`
+      }, resetArm === "saved" ? "Confirm reset" : "Reset")), /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap items-center gap-1.5",
+        title: `Click a saved colour to write it into Color${colorSlot + 1} on the keyboard · hover to edit or remove`
+      }, savedColors.map((c, i) => /*#__PURE__*/React.createElement("div", {
+        key: i,
+        className: "relative group"
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => editSlot(c),
+        title: `Use ${c.toUpperCase()} in Color${colorSlot + 1}`,
+        className: "block w-[22px] h-[22px] rounded-md ring-1 ring-white/10 hover:ring-white/40 hover:scale-105 transition-transform",
+        style: {
+          background: c,
+          boxShadow: `0 0 10px ${c}44`
+        }
+      }), /*#__PURE__*/React.createElement("label", {
+        title: "Edit colour",
+        className: "absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-slate-900 ring-1 ring-white/20 grid place-items-center text-[8px] leading-none text-slate-300 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+      }, "\u270E", /*#__PURE__*/React.createElement("input", {
+        type: "color",
+        value: c,
+        onChange: e => editSaved(i, e.target.value),
+        className: "sr-only"
+      })), /*#__PURE__*/React.createElement("button", {
+        onClick: () => removeSaved(i),
+        title: "Remove",
+        className: "absolute -top-1.5 -left-1.5 w-3.5 h-3.5 rounded-full bg-slate-900 ring-1 ring-white/20 grid place-items-center text-[8px] leading-none text-slate-300 hover:text-rose-300 opacity-0 group-hover:opacity-100 transition-opacity"
+      }, "\u2715"))), savedColors.length < SAVED_COLORS_CAP && /*#__PURE__*/React.createElement("label", {
+        title: "Add a colour",
+        className: "w-[22px] h-[22px] rounded-md border border-dashed border-[var(--line)] text-[var(--text-dim)] hover:border-[color-mix(in_srgb,var(--accent)_30%,transparent)] hover:text-white grid place-items-center cursor-pointer transition-colors"
+      }, IPlus ? /*#__PURE__*/React.createElement(IPlus, {
+        size: 10
+      }) : "+", /*#__PURE__*/React.createElement("input", {
+        type: "color",
+        defaultValue: "#9d4edd",
+        onChange: e => addSaved(e.target.value),
+        className: "sr-only"
+      })))));
+    })() : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between mb-2"
     }, /*#__PURE__*/React.createElement("span", {
       className: "font-display text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]"
@@ -1037,7 +1508,7 @@
       }
     }))))))) : /*#__PURE__*/React.createElement("div", {
       className: "font-mono text-[11px] text-[var(--text-faint)]"
-    }, "Custom mode drives colors per Effect Zone (see the Effect Preview widget) \u2014 the shared palette is hidden while Custom is active."), /*#__PURE__*/React.createElement("div", {
+    }, "Custom mode drives colors per Effect Zone (see the Effect Preview widget) \u2014 the shared palette is hidden while Custom is active."), bgSupported ? /*#__PURE__*/React.createElement("div", {
       className: "glass p-4"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-baseline justify-between mb-2.5"
@@ -1080,7 +1551,9 @@
         background: c
       },
       title: c
-    })))));
+    })))) : /*#__PURE__*/React.createElement("div", {
+      className: "glass p-4 font-mono text-[11px] text-[var(--text-faint)] leading-relaxed"
+    }, boardName, " has no background color: its firmware lights each key with the effect color itself, so there is no backdrop layer to set."));
   }
 
   /* ============================================================
@@ -1098,13 +1571,15 @@
       selectedKeys
     } = ctx;
     const palette = colors || [];
-    const previewColor = palette[0] || bgColor || "#9d4edd";
+    const bctx = boardCtxOf(ctx);
+    // Firmware-only boards play the SELECTED stored slot, not always slot 0.
+    const fwSlot = (bctx.lighting || {}).hostEngine === false ? Math.max(0, Math.min(6, ctx.colorSlot | 0)) : 0;
+    const previewColor = palette[fwSlot] || palette[0] || bgColor || "#9d4edd";
     const kind = previewKindFor(pattern);
 
     /* Board awareness (additive): Effect Zones animate via the host streaming
        engine, so they are only offered when the board allows it (hostEngine
        true, or no board data — fail-open, exactly today's behaviour). */
-    const bctx = boardCtxOf(ctx);
     const hostFx = !bctx.lighting || bctx.lighting.hostEngine !== false;
     const boardName = bctx.board && bctx.board.name || "this board";
     // Streaming fps cap — drives the ≈ markers on zone modes (null = no cap).
@@ -1117,6 +1592,9 @@
        render exactly today's preview. */
     const fwRule = modeRuleFor(bctx.lighting, pattern);
     const fwOnlyMode = !!fwRule && !LIGHT_MODES.some(m => m.id === pattern);
+    /* "Colorful" leaves the hue choice to the board, so a single-swatch preview
+       would be a guess — mirror the full spectrum instead. */
+    const previewKind = ctx.fullColor && (bctx.lighting || {}).hostEngine === false ? "spectrum" : kind;
     return /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col gap-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -1129,8 +1607,8 @@
       className: "font-mono text-[10px] text-[var(--text-faint)] uppercase tracking-[0.16em]"
     }, fwOnlyMode ? pattern + " · firmware" : pattern)), fwOnlyMode ? /*#__PURE__*/React.createElement("div", {
       className: "font-mono text-[10px] text-[var(--text-faint)] leading-relaxed mt-2"
-    }, "\"", fwRule.name || pattern, "\" is one of ", boardName, "'s built-in firmware effects \u2014 the animation runs on the keyboard itself, not through Aether's host engine, so there is no host preview to mirror here. The board plays it live.") : /*#__PURE__*/React.createElement(PatternPreview, {
-      kind: kind,
+    }, "\"", fwRule.name || pattern, "\" is one of ", boardName, "'s built-in firmware effects \u2014 the animation runs on the keyboard itself, not through Aether's host engine.", fwRule.byte >= 17 ? " It lights up only while a key is pressed, so the board stays dark on its own." : bctx.lighting && bctx.lighting.hostEngine === false ? " The Live Keyboard panel replays it key by key off the board; the board runs the real effect." : " The board plays it live.") : /*#__PURE__*/React.createElement(PatternPreview, {
+      kind: previewKind,
       color: previewColor
     })), pattern === "custom" && (hostFx ? /*#__PURE__*/React.createElement(ZonesPanel, {
       zones: zones,
@@ -1265,6 +1743,9 @@
     const bctx = boardCtxOf(ctx);
     const fwRule = modeRuleFor(bctx.lighting, pattern);
     const fwLive = !!fwRule && pattern !== "static" && pattern !== "custom" && (!LIGHT_MODES.some(m => m.id === pattern) || bctx.lighting && bctx.lighting.hostEngine === false);
+    /* Firmware-only boards expose no per-key RGB while an effect runs, so these
+       keys replay firmwareSimFrame's look-alike instead of a readback. */
+    const fwSim = fwLive && !!bctx.lighting && bctx.lighting.hostEngine === false;
     if (typeof KeyboardPanel !== "function") {
       return /*#__PURE__*/React.createElement("div", {
         className: "font-mono text-[11px] text-[var(--text-faint)] p-2"
@@ -1276,7 +1757,7 @@
       className: "font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-faint)]"
     }, "connect the board to see the live effect"), fwLive && /*#__PURE__*/React.createElement("div", {
       className: "font-mono text-[10px] text-[var(--text-faint)] leading-relaxed text-center"
-    }, "\"", fwRule.name || pattern, "\" animates on the keyboard's own firmware \u2014 the board plays it live. Keys below show ", fwRule.color === false ? "your background color only (this effect uses firmware-chosen colors)" : "the exact colors sent (effect color over your background)", ", not the animation."), /*#__PURE__*/React.createElement("div", {
+    }, fwSim ? fwRule.byte >= 17 ? /*#__PURE__*/React.createElement(React.Fragment, null, "\"", fwRule.name || pattern, "\" only lights up while a key is pressed, so the board sits dark until you type \u2014 the keys below stay dark too. Press a key and it answers from the keyboard itself.") : /*#__PURE__*/React.createElement(React.Fragment, null, "\"", fwRule.name || pattern, "\" plays on the keyboard's own firmware, which reports no per-key RGB \u2014 the keys below replay what the board shows, sampled key by key off it. Motion, hue and brightness follow the board; the board itself is the real effect.") : /*#__PURE__*/React.createElement(React.Fragment, null, "\"", fwRule.name || pattern, "\" animates on the keyboard's own firmware \u2014 the board plays it live. Keys below show ", fwRule.color === false ? "your background color only (this effect uses firmware-chosen colors)" : "the exact colors sent (effect color over your background)", ", not the animation.")), /*#__PURE__*/React.createElement("div", {
       className: "flex justify-center"
     }, React.createElement(KeyboardPanel, {
       mode: "lighting",
@@ -1382,6 +1863,7 @@
     buildLightCalls,
     briByteFor,
     spdByteFor,
-    previewSimColor
+    previewSimColor,
+    firmwareSimFrame
   };
 })();

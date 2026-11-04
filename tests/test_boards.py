@@ -53,9 +53,10 @@ def test_registry_loads():
 
 
 def test_default_is_win60():
+    # This fork ships the WIN 68 HE MAX as the default board.
     reg = boards.load_registry()
-    assert reg.default.slug == "aula-win60-he"
-    assert reg.default.vid == 0x2E3C and reg.default.pid == 0xC365
+    assert reg.default.slug == "aula-win68he-max"
+    assert reg.default.vid == 0x1CA2 and reg.default.pid == 0x1901
 
 
 def test_all_submitted_boards_present():
@@ -218,7 +219,10 @@ def test_only_captured_boards_are_drivable():
     captured = {"aula-win60-he", "aula-mini60he-max",
                 "aula-win60he-pro", "aula-mini60he-pro",  # own decoded protocol
                 "aula-mini60he-pro-24g",  # own dongle captures + HW-verified 0xFF60 transport (see docstring)
-                "aula-win68-he", "aula-kp-te153"}  # 2E3C:C365 shared-identity exception (see docstring)
+                "aula-win68-he", "aula-kp-te153",  # 2E3C:C365 shared-identity exception (see docstring)
+                # own decoded SparkPlay protocol, round-trip verified on the
+                # physical boards (this fork; official magnet.aulastar.com driver)
+                "aula-win68he-max", "aula-win60he-max"}
     for p in reg.profiles:
         if p.slug in captured:
             assert p.drivable, f"{p.slug} should be drivable"
@@ -371,7 +375,7 @@ def test_capability_values_validated():
 def test_undeclared_capabilities_default_false():
     """Boards that don't declare the finer-grained flags degrade safely."""
     reg = boards.load_registry()
-    p = reg.by_slug("aula-win60he-max")   # legacy-style entry, no new fields
+    p = reg.by_slug("aula-mini68he")   # legacy-style entry, no new fields
     for flag in ("rapidTrigger", "socd", "macros", "calibration", "gamepad", "deadzone"):
         assert p.cap(flag) is False
     assert p.lighting is None
@@ -473,6 +477,33 @@ def test_win60_lighting_table():
     assert by_id["breath"]["bg"] is True and by_id["breath"]["fullColor"] is True
 
 
+def test_win68max_lighting_table_matches_sparkplay():
+    """The WIN 68 HE MAX's PRGB table, cross-checked against the official
+    SparkPlay bundle and camera-verified on the physical board: 20 dynamic
+    effects in the vendor's order (+ static 0, custom 21), each taking ONE
+    palette colour, none taking a background, and the rainbow slot available
+    for static and every dynamic effect. Bytes 5/6 are named "... Rainbow"
+    but DO honour the palette colour (2026-11-04: red frame stayed red, green
+    frame stayed green), so they must not be flagged colour-locked."""
+    lt = boards.load_registry().by_slug("aula-win68he-max").lighting
+    assert lt["hostEngine"] is False and lt["customModeByte"] == 21
+    by_byte = {m["byte"]: m for m in lt["modes"]}
+    assert [by_byte[b]["name"] for b in range(1, 21)] == [
+        "Rippling Water", "Tide Flux", "Soft Ripples", "Spinning Storm",
+        "Lucky Rainbow", "Glowing Rainbow", "Radiant Glow", "Shifting Panes",
+        "Wave Shift", "Shape Shift", "Sine Wave", "Smooth Flow",
+        "Blooming Flowers", "Colorful Pattern", "Heavy Rain", "Eternal Pulse",
+        "Traceless Steps", "Snow Blossoms", "Laser Beam", "Water Ripples"]
+    assert by_byte[0]["name"] == "Static" and by_byte[21]["name"] == "Custom"
+    # Only Snow Blossoms (18) is colour-locked — red and green inputs both
+    # produced the same red/cyan/green mix on hardware; bytes 5/6 followed
+    # the palette. No mode has a background (PRGB has no bg field).
+    assert {b for b, m in by_byte.items() if not m["color"]} == {18}
+    assert not any(m["bg"] for m in lt["modes"]), "PRGB has no background field"
+    assert all(m["fullColor"] for m in lt["modes"] if m["byte"] != 21)
+    assert {b for b, m in by_byte.items() if not m["speed"]} == {0, 21}
+
+
 def test_mini60pro_lighting_table():
     """Board B declares its OWN 20 firmware modes (0x23) — not the Win60 list."""
     lt = boards.load_registry().by_slug("aula-mini60he-pro").lighting
@@ -556,6 +587,8 @@ def test_actuation_block_fail_closed():
         {"switches": [{"id": "a"}, {"id": "a"}]},                           # dup switch id
         {"switches": [{"name": "no id"}]},                                  # missing id
         {"switches": [{"id": "a", "code": 999}]},                           # code range
+        {"switches": [{"id": "a", "code": 1}], "defaultSwitch": "b"},       # not listed
+        {"switches": [{"id": "a", "code": 1}], "defaultSwitch": 7},         # not a string
     ]
     for i, blk in enumerate(bad_blocks):
         entry = _board("x", actuation=blk)
@@ -577,6 +610,26 @@ def test_per_board_actuation_facts():
     assert b["rtRange"] == [0.01, 3.4]
     assert b["deadzoneRange"] == [0.0, 0.5]
     assert b["switches"] == [], "axis ids for board B are not captured yet"
+
+
+def test_win68he_max_switch_table_matches_the_boards_own_axis_list():
+    """The four ids are what CMD_SYS 118 answers on 1.0.9 hardware
+    ([11, 1, 14, 3]); the names are the vendor's, with the newer site's
+    rebrandings kept as the subtitle (Yongchun == Wing Chun)."""
+    a = boards.load_registry().by_slug("aula-win68he-max").actuation
+    switches = a["switches"]
+    assert [s["code"] for s in switches] == [11, 1, 14, 3]
+    assert [s["id"] for s in switches] == ["yongchun", "jade-pro",
+                                          "black-emperor", "ttc-king"]
+    assert switches[0]["name"] == "Yongchun"
+    assert switches[0]["sub"] == "Wing Chun Magnetic"
+    # The board ships with Yongchun, and L_AXIS 0 (its factory state) means
+    # position 0 in this very list — the same switch.
+    assert a["defaultSwitch"] == "yongchun"
+    assert switches[0]["id"] == a["defaultSwitch"]
+    assert switches[0]["code"] == 11            # CMD_SYS 118 lists it first
+    # The keycap-sized label Switch View draws on each key.
+    assert [s["short"] for s in switches] == ["YC", "JP", "BE", "TK"]
 
 
 # ---------------------------------------------------------------- new: product strings
@@ -737,7 +790,8 @@ def test_unsupported_boards_are_never_offered():
     # both are drivable by family/capture, but no physical example of either has
     # ever been driven by Aether. mini60he-max is out for the same reason.
     assert offered == {"aula-win60-he", "aula-win68-he",
-                       "aula-mini60he-pro", "aula-mini60he-pro-24g"}
+                       "aula-mini60he-pro", "aula-mini60he-pro-24g",
+                       "aula-win60he-max", "aula-win68he-max"}
     for p in reg.profiles:
         if not p.drivable:
             assert p.offered is False, f"{p.slug} has no protocol but is offered"

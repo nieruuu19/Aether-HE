@@ -28,6 +28,8 @@ require that it either
 
 No hardware: devices are the same stubs test_drivers.py uses.
 """
+import json
+import os
 import threading
 
 import pytest
@@ -40,6 +42,8 @@ from drivers import UnsupportedFeature, NullDriver, get_driver
 from drivers import mini60 as mini60_mod
 
 from test_drivers import StubDevice, FakeMiniBoard
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # ------------------------------------------------------------- framing ----
@@ -55,9 +59,24 @@ def _is_mini60_frame(f, profile):
     return len(f) == n + 1 and f[0] == 0x00 and f[1] == pm.MAGIC
 
 
+def _is_sparkplay_frame(f, profile):
+    """64-byte Aula SparkPlay frame [0x5C, len, cmd, checksum, payload...],
+    optionally behind a 0x00 report id (send_raw). Checksum is the vendor
+    formula over the magic, length, command and LAST payload byte."""
+    b = f[1:] if len(f) == 65 and f[0] == 0x00 else list(f)
+    if len(b) != 64 or b[0] != 0x5C:
+        return False
+    n = b[1]
+    if not 1 <= n <= 61:
+        return False
+    chk = (0x35 + b[0] + b[1] + b[2] + b[n + 3]) & 0xFF
+    return b[3] == chk
+
+
 FRAME_SHAPE = {
     "protocol": _is_win60_frame,
     "protocol_mini60": _is_mini60_frame,
+    "protocol_sparkplay": _is_sparkplay_frame,
 }
 
 
@@ -95,6 +114,44 @@ def _first_mode_byte(profile):
     return 0
 
 
+def _layout_keys(profile):
+    """The board's own layout, in index order. Ops must target a key the
+    board actually has: the SparkPlay boards start at matrix index 21, so a
+    hardcoded 0 would be rejected as unknown (or, worse, silently dropped)."""
+    with open(os.path.join(ROOT, profile.keymap), encoding="utf-8") as fh:
+        return sorted(json.load(fh)["keys"], key=lambda k: int(k["index"]))
+
+
+def _first_index(profile):
+    return int(_layout_keys(profile)[0]["index"])
+
+
+def _op_socd(d, p):
+    if p.protocol == "protocol_sparkplay":
+        a, b = _layout_keys(p)[:2]
+        d.set_advanced_socd(int(a["index"]), int(b["index"]),
+                            int(a["hidCode"], 16), int(b["hidCode"], 16), 1)
+    else:
+        d.set_socd([])
+
+
+def _op_macros(d, p):
+    if p.protocol == "protocol_sparkplay":
+        # Frame shape only: keep the user's macro store untouched.
+        d._save_macro_store = lambda *a, **k: None
+        d.write_macro(0, [(10, 0x04, True)])
+        d.bind_macro(_first_index(p), 0)
+    else:
+        d.write_macro(0, [])
+
+
+#: (protocol, capability) pairs implemented entirely on the host, so a
+#: success with zero device frames is the correct outcome, not a silent lie.
+HOST_SIDE_OPS = {
+    ("protocol_sparkplay", "gamepad"),
+}
+
+
 # ------------------------------------------------------------- the ops ----
 # registry capability name -> a call that exercises it end to end. Keep these
 # minimal and side-effect free at the stub level: the assertion is about
@@ -103,21 +160,20 @@ CAPABILITY_OPS = {
     "lighting":
         lambda d, p: d.set_lighting(_first_mode_byte(p), (255, 0, 0)),
     "perKeyRgb":
-        lambda d, p: d.set_per_key_rgb({0: (1, 2, 3)}),
+        lambda d, p: d.set_per_key_rgb({_first_index(p): (1, 2, 3)}),
     "actuation":
-        lambda d, p: d.set_actuation([0], 0, 1.5),
+        lambda d, p: d.set_actuation([_first_index(p)], 0, 1.5),
     "rapidTrigger":
-        lambda d, p: d.set_actuation([0], 12, 1.5, 0.2, 0.2),
+        lambda d, p: d.set_actuation([_first_index(p)], 12, 1.5, 0.2, 0.2),
     "deadzone":
-        lambda d, p: d.set_deadband({0: (4, 5)}, top_mm=0.04, bottom_mm=0.05),
-    "socd":
-        lambda d, p: d.set_socd([]),
+        lambda d, p: d.set_deadband({_first_index(p): (4, 5)},
+                                    top_mm=0.04, bottom_mm=0.05),
+    "socd": _op_socd,
     "calibration":
         lambda d, p: d.set_calibration(True),
     "gamepad":
         lambda d, p: d.set_gamepad_mode(True),
-    "macros":
-        lambda d, p: d.write_macro(0, []),
+    "macros": _op_macros,
 }
 
 #: Boards whose registry declares a capability ``true`` that their driver
@@ -178,6 +234,8 @@ def test_capability_matrix_right_frames_or_loud_refusal(slug, cap):
     assert declared is not False, (
         f"{slug} declares {cap}=false but its driver wrote "
         f"{len(dev.writes)} frames")
+    if not dev.writes and (profile.protocol, cap) in HOST_SIDE_OPS:
+        return
     assert dev.writes, f"{slug}/{cap} claimed success but wrote nothing"
     shape = FRAME_SHAPE[profile.protocol]
     for f in dev.writes:
@@ -238,6 +296,11 @@ def _wire_mode_byte(profile, frames):
         # frames carry the 0x00 report id: [0]=id [1]=0xAA [2]=cmd
         light = [f for f in frames if f[2] == pm.CMD_LIGHTING]
         return light[-1][9] if light else None       # report id + frame[8]
+    if profile.protocol == "protocol_sparkplay":
+        # [0]=0x00 report id [1]=0x5C [2]=len [3]=cmd [4]=checksum; the mode
+        # byte is payload[39] -> frame[44] (5-byte header + 39).
+        light = [f for f in frames if f[3] == 0x18]
+        return light[-1][44] if light else None
     light = [f for f in frames if f[1] == 7]         # Win60 cmd 7
     return light[-1][6] if light else None           # report id + d[5]
 

@@ -239,11 +239,11 @@
     const boards = drivableBoards(ctx);
     const info = boards.find(b => b.slug === board) || boards[0];
     // Read-only preview: a frozen empty selection + no-op setter so nothing is
-    // editable and no device is needed. Only the Win60 HE layout is bundled in
-    // keyboard.jsx today; other boards show the layout note instead.
+    // editable and no device is needed. Only the Win 68 HE MAX (65%) layout is
+    // bundled in keyboard.jsx today; other boards show the layout note instead.
     const emptySel = useMemo(() => new Set(), []);
     const noop = useRef(() => {}).current;
-    const canRender = board === "aula-win60-he" && typeof KeyboardPanel === "function";
+    const canRender = board === "aula-win68he-max" && typeof KeyboardPanel === "function";
     return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
       className: "font-title",
       style: {
